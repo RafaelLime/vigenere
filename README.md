@@ -1,75 +1,77 @@
-# Vigenère Cipher
+# Cifra de Vigenère
 
-A small Python project that encodes and decodes text using the
-[Vigenère cipher](https://en.wikipedia.org/wiki/Vigen%C3%A8re_cipher),
-exposed through a command-line interface. The cipher logic is implemented from
-scratch in [`vigenere/cipher.py`](vigenere/cipher.py); no cryptography library
-is used.
+Projeto em Python que cifra e decifra textos com a
+[cifra de Vigenère](https://pt.wikipedia.org/wiki/Cifra_de_Vigen%C3%A8re),
+disponibilizado por uma interface de linha de comando. A lógica da cifra foi
+implementada do zero em [`vigenere/cipher.py`](vigenere/cipher.py); nenhuma
+biblioteca de criptografia é utilizada.
 
-## How it works
+## Como funciona
 
-The alphabet is the classic 26 letters `A-Z`. Each letter of the message is
-shifted by the corresponding letter of the repeating key:
+O alfabeto adotado é o clássico, de 26 letras `A-Z`. Cada letra da mensagem é
+deslocada pela letra correspondente da chave, que se repete ciclicamente:
 
 ```
-encoding:  C_i = (P_i + K_i) mod 26
-decoding:  P_i = (C_i - K_i) mod 26
+cifração:   C_i = (P_i + K_i) mod 26
+decifração: P_i = (C_i - K_i) mod 26
 ```
 
-`i` counts only the letters of the message, so the key never gets out of sync
-with the characters it is applied to.
+O índice `i` conta apenas as letras da mensagem, de modo que a chave nunca sai
+de sincronia com os caracteres em que é aplicada.
 
-### How each kind of character is processed
+### Como cada tipo de caractere é tratado
 
-| Input | Treatment |
+| Entrada | Tratamento |
 | --- | --- |
-| `a-z` / `A-Z` | Ciphered. Case is preserved in `preserve` mode, forced to uppercase in `strict` mode. |
-| Accented letters (`á à â ã ç é ê í ó ô õ ú ü ñ …`) | Folded onto their base letter with Unicode NFD (`é -> e`, `ç -> c`, `ã -> a`, `Ó -> O`) and then ciphered. **The accent is not restored on decoding**: `ação` round-trips as `acao`. |
-| Spaces, digits, punctuation | `preserve` mode: copied unchanged, and they do **not** consume a key letter. `strict` mode: discarded. |
-| Key characters | Folded the same way; anything that is not a letter is ignored (`l3e!mão` becomes `lemao`). A key with no letters at all is an error. |
+| `a-z` / `A-Z` | Cifradas. Maiúsculas/minúsculas são preservadas no modo `preserve` e forçadas a maiúsculas no modo `strict`. |
+| Letras acentuadas (`á à â ã ç é ê í ó ô õ ú ü ñ …`) | Reduzidas à letra base por decomposição Unicode NFD (`é -> e`, `ç -> c`, `ã -> a`, `Ó -> O`) e então cifradas. **O acento não é restaurado na decifração**: `ação` volta como `acao`. |
+| Espaços, dígitos, pontuação | Modo `preserve`: copiados sem alteração e **não** consomem letra da chave. Modo `strict`: descartados. |
+| Caracteres da chave | Reduzidos da mesma forma; o que não é letra é ignorado (`l3e!mão` vira `lemao`). Uma chave sem nenhuma letra é erro. |
 
-### Alphabet modes
+### Modos de alfabeto
 
-- `--alphabet preserve` (default): keeps case, spacing and punctuation, so the
-  output stays readable. The layout of the plaintext remains visible in the
-  ciphertext.
-- `--alphabet strict`: output is a single run of uppercase `A-Z`. This is the
-  usual format for cryptanalysis exercises, and it leaks no word boundaries.
+- `--alphabet preserve` (padrão): mantém maiúsculas/minúsculas, espaçamento e
+  pontuação, deixando o resultado legível. Em contrapartida, a estrutura do
+  texto claro continua visível no criptograma.
+- `--alphabet strict`: a saída é uma sequência contínua de letras `A-Z`
+  maiúsculas. É o formato usual dos exercícios de criptoanálise e não revela
+  os limites das palavras.
 
 ```bash
-$ vigenere encode "Attack at dawn!" --key lemon
-Lxfopv ef rnhr!
-$ vigenere encode "Attack at dawn!" --key lemon --alphabet strict
-LXFOPVEFRNHR
+$ vigenere encode "Ataque ao amanhecer!" --key segredo
+Sxghyh og esrrksuix!
+$ vigenere encode "Ataque ao amanhecer!" --key segredo --alphabet strict
+SXGHYHOGESRRKSUIX
 ```
 
-## Installation
+## Instalação
 
 ```bash
 pip install -e .
 ```
 
-This installs a `vigenere` command. You can also run it without installing via
-`python -m vigenere`.
+Isso instala o comando `vigenere`. Também é possível executar sem instalar,
+com `python -m vigenere`.
 
-## Usage
+## Uso
 
 ```
-vigenere encode [text] --key KEY [--alphabet {preserve,strict}] [-i FILE] [-o FILE] [-v]
-vigenere decode [text] --key KEY [--alphabet {preserve,strict}] [-i FILE] [-o FILE] [-v]
+vigenere encode [texto] --key CHAVE [--alphabet {preserve,strict}] [-i ARQUIVO] [-o ARQUIVO] [-v]
+vigenere decode [texto] --key CHAVE [--alphabet {preserve,strict}] [-i ARQUIVO] [-o ARQUIVO] [-v]
 ```
 
-| Option | Meaning |
+| Opção | Significado |
 | --- | --- |
-| `-k`, `--key` | The key (required). |
-| `-a`, `--alphabet` | `preserve` (default) or `strict`. |
-| `-i`, `--input` | Read the text from a file instead of the argument. |
-| `-o`, `--output` | Write the result to a file instead of stdout. |
-| `-v`, `--verbose` | Print the parameters actually used (on stderr). |
+| `-k`, `--key` | A chave (obrigatória). |
+| `-a`, `--alphabet` | `preserve` (padrão) ou `strict`. |
+| `-i`, `--input` | Lê o texto de um arquivo em vez do argumento. |
+| `-o`, `--output` | Escreve o resultado em um arquivo em vez da saída padrão. |
+| `-v`, `--verbose` | Exibe os parâmetros efetivamente utilizados (em stderr). |
 
-The text can be given as an argument, with `--input`, or piped through stdin.
+O texto pode ser passado como argumento, com `--input` ou pela entrada padrão
+(stdin).
 
-### Examples
+### Exemplos
 
 ```bash
 $ vigenere encode "ATTACKATDAWN" --key LEMON
@@ -81,30 +83,30 @@ ATTACKATDAWN
 $ vigenere encode "Olá, você está bem?" --key segredo
 Gpg, msfs wwzr fha?
 
-$ echo "Attack at dawn" | vigenere encode --key lemon
+$ echo "Ataque ao amanhecer" | vigenere encode --key segredo
 ```
 
-Ciphering a file into the strict A-Z format, with a summary of the parameters:
+Cifrando um arquivo no formato estrito A-Z, com o resumo dos parâmetros:
 
 ```bash
 $ vigenere encode -i mensagem.txt -o criptograma.txt --key segredo --alphabet strict -v
-command: encode
-alphabet: strict
-key: segredo (length 7)
-input: 19 characters, 17 of them letters
+comando: encode
+alfabeto: strict
+chave: segredo (tamanho 7)
+entrada: 19 caracteres, 17 deles letras
 ```
 
-### Input validation
+### Validação das entradas
 
-The program refuses a key with no letters, and warns (on stderr, without
-stopping) when:
+O programa recusa uma chave sem nenhuma letra e avisa (em stderr, sem
+interromper a execução) quando:
 
-- the key had characters removed or accents folded, showing the key actually
-  used;
-- the key is a single letter, which makes it a Caesar cipher;
-- the text contains no letter of the alphabet, so nothing was ciphered.
+- a chave teve caracteres removidos ou acentos reduzidos, mostrando a chave
+  realmente utilizada;
+- a chave tem uma única letra, o que a torna equivalente à cifra de César;
+- o texto não contém nenhuma letra do alfabeto, de modo que nada foi cifrado.
 
-## Running the tests
+## Executando os testes
 
 ```bash
 pip install -e ".[test]"

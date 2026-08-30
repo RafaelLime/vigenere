@@ -1,4 +1,4 @@
-"""Command-line interface for the Vigenère cipher."""
+"""Interface de linha de comando da cifra de Vigenère."""
 
 import argparse
 import sys
@@ -9,58 +9,66 @@ from .cipher import ALPHABETS, count_letters, decode, effective_key, encode
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vigenere",
-        description="Encode or decode text using the Vigenère cipher.",
+        description="Cifra e decifra textos usando a cifra de Vigenère.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     commands = (
-        ("encode", "Encode plaintext into ciphertext.", "Plaintext to encode."),
-        ("decode", "Decode ciphertext into plaintext.", "Ciphertext to decode."),
+        (
+            "encode",
+            "Cifra um texto claro, produzindo o criptograma.",
+            "Texto claro a cifrar.",
+        ),
+        (
+            "decode",
+            "Decifra um criptograma, recuperando o texto claro.",
+            "Criptograma a decifrar.",
+        ),
     )
     for name, command_help, text_help in commands:
         sub = subparsers.add_parser(name, help=command_help)
         sub.add_argument("text", nargs="?", help=text_help)
-        sub.add_argument("-k", "--key", required=True, help="Cipher key.")
+        sub.add_argument("-k", "--key", required=True, help="Chave da cifra.")
         sub.add_argument(
             "-a",
             "--alphabet",
             choices=ALPHABETS,
             default="preserve",
             help=(
-                "preserve (default): keep case, spaces and punctuation; "
-                "strict: output only uppercase A-Z."
+                "preserve (padrão): mantém maiúsculas/minúsculas, espaços e "
+                "pontuação; strict: produz apenas letras A-Z maiúsculas."
             ),
         )
-        sub.add_argument("-i", "--input", help="Read the text from this file.")
-        sub.add_argument("-o", "--output", help="Write the result to this file.")
+        sub.add_argument("-i", "--input", help="Lê o texto deste arquivo.")
+        sub.add_argument("-o", "--output", help="Escreve o resultado neste arquivo.")
         sub.add_argument(
             "-v",
             "--verbose",
             action="store_true",
-            help="Print a summary of the parameters used (on stderr).",
+            help="Exibe um resumo dos parâmetros utilizados (em stderr).",
         )
 
     return parser
 
 
 def _warn(message: str) -> None:
-    print(f"warning: {message}", file=sys.stderr)
+    print(f"aviso: {message}", file=sys.stderr)
 
 
 def _read_text(args: argparse.Namespace) -> str:
-    """Take the text from --input, the positional argument, or stdin."""
+    """Obtém o texto de --input, do argumento posicional ou da entrada padrão."""
     if args.input is not None:
         try:
             with open(args.input, encoding="utf-8") as handle:
                 return handle.read()
         except OSError as exc:
-            raise SystemExit(f"error: cannot read {args.input!r}: {exc.strerror}")
+            raise SystemExit(f"erro: não foi possível ler {args.input!r}: {exc.strerror}")
     if args.text is not None:
         return args.text
     if not sys.stdin.isatty():
         return sys.stdin.read().rstrip("\n")
     raise SystemExit(
-        "error: no text provided (pass it as an argument, with --input, or via stdin)."
+        "erro: nenhum texto informado (passe como argumento, com --input ou via stdin)."
     )
 
 
@@ -72,31 +80,31 @@ def _write_text(result: str, destination: str | None) -> None:
         with open(destination, "w", encoding="utf-8") as handle:
             handle.write(result + "\n")
     except OSError as exc:
-        raise SystemExit(f"error: cannot write {destination!r}: {exc.strerror}")
+        raise SystemExit(f"erro: não foi possível escrever {destination!r}: {exc.strerror}")
 
 
 def _check_inputs(text: str, key: str, args: argparse.Namespace) -> str:
-    """Validate the inputs, warn about surprising ones, return the effective key."""
-    key_used = effective_key(key)  # raises ValueError when the key has no letters
+    """Valida as entradas, avisa sobre casos inesperados e devolve a chave efetiva."""
+    key_used = effective_key(key)  # levanta ValueError se a chave não tiver letras
 
     if key_used != key.lower():
         _warn(
-            f"the key was reduced to {key_used!r}; characters outside A-Z were "
-            "ignored and accents were folded onto their base letter."
+            f"a chave foi reduzida para {key_used!r}; caracteres fora de A-Z foram "
+            "ignorados e os acentos foram reduzidos à letra base."
         )
     if len(key_used) == 1:
-        _warn("a one-letter key is equivalent to a Caesar cipher.")
+        _warn("uma chave de uma única letra equivale à cifra de César.")
 
     letters = count_letters(text)
     if letters == 0:
-        _warn("the text has no A-Z letters, so nothing was ciphered.")
+        _warn("o texto não contém letras de A-Z; nada foi cifrado.")
 
     if args.verbose:
         print(
-            f"command: {args.command}\n"
-            f"alphabet: {args.alphabet}\n"
-            f"key: {key_used} (length {len(key_used)})\n"
-            f"input: {len(text)} characters, {letters} of them letters",
+            f"comando: {args.command}\n"
+            f"alfabeto: {args.alphabet}\n"
+            f"chave: {key_used} (tamanho {len(key_used)})\n"
+            f"entrada: {len(text)} caracteres, {letters} deles letras",
             file=sys.stderr,
         )
 
@@ -114,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         transform = encode if args.command == "encode" else decode
         result = transform(text, args.key, alphabet=args.alphabet)
     except ValueError as exc:
-        raise SystemExit(f"error: {exc}")
+        raise SystemExit(f"erro: {exc}")
 
     _write_text(result, args.output)
     return 0

@@ -1,29 +1,31 @@
-"""Core Vigenère cipher logic.
+"""Lógica central da cifra de Vigenère.
 
-The cipher works over the classic 26-letter alphabet ``A-Z``. Every input
-character is first *folded* onto that alphabet:
+A cifra opera sobre o alfabeto clássico de 26 letras ``A-Z``. Todo caractere da
+entrada é primeiro *reduzido* a esse alfabeto:
 
-- ASCII letters ``a-z`` / ``A-Z`` are used as they are;
-- accented letters are decomposed (Unicode NFD) and reduced to their base
-  letter, so ``é -> e``, ``ç -> c``, ``ã -> a``, ``Ó -> O``. Note that the
-  accent is therefore **lost**: decoding gives back ``acao``, not ``ação``;
-- anything else (spaces, digits, punctuation) is not part of the alphabet.
+- letras ASCII ``a-z`` / ``A-Z`` são usadas como estão;
+- letras acentuadas são decompostas (Unicode NFD) e reduzidas à sua letra base,
+  de modo que ``é -> e``, ``ç -> c``, ``ã -> a``, ``Ó -> O``. O acento é,
+  portanto, **perdido**: ao decifrar obtém-se ``acao``, e não ``ação``;
+- qualquer outro caractere (espaços, dígitos, pontuação) não pertence ao
+  alfabeto.
 
-How the non-alphabet characters are handled depends on the ``alphabet`` mode:
+O tratamento dos caracteres fora do alfabeto depende do modo ``alphabet``:
 
-``preserve`` (default)
-    They are copied to the output unchanged and do **not** consume a key
-    letter. Letter case is preserved. Convenient for reading the result, but
-    the punctuation/spacing of the plaintext stays visible in the ciphertext.
+``preserve`` (padrão)
+    São copiados para a saída sem alteração e **não** consomem uma letra da
+    chave. Maiúsculas e minúsculas são preservadas. É conveniente para ler o
+    resultado, mas a pontuação e o espaçamento do texto claro continuam
+    visíveis no criptograma.
 
 ``strict``
-    They are discarded. The output is a continuous run of uppercase ``A-Z``,
-    the usual format for classical cryptanalysis exercises.
+    São descartados. A saída é uma sequência contínua de letras ``A-Z``
+    maiúsculas, o formato usual dos exercícios clássicos de criptoanálise.
 
-The mathematical core is in :func:`_transform`:
-    encoding:  C_i = (P_i + K_i) mod 26
-    decoding:  P_i = (C_i - K_i) mod 26
-where ``i`` counts only the letters of the message and ``K`` repeats cyclically.
+O núcleo matemático está em :func:`_transform`:
+    cifração:   C_i = (P_i + K_i) mod 26
+    decifração: P_i = (C_i - K_i) mod 26
+onde ``i`` conta apenas as letras da mensagem e ``K`` se repete ciclicamente.
 """
 
 import unicodedata
@@ -33,12 +35,12 @@ ALPHABETS = ("preserve", "strict")
 
 
 def fold(char: str) -> str | None:
-    """Fold ``char`` onto the A-Z alphabet.
+    """Reduz ``char`` ao alfabeto A-Z.
 
-    Returns the base ASCII letter, keeping the original case, or ``None`` when
-    the character is not a letter of the alphabet. Accented letters are
-    normalised with NFD, which splits e.g. ``ç`` into ``c`` + combining
-    cedilla, so the first code point is the base letter.
+    Devolve a letra ASCII base, mantendo maiúscula/minúscula, ou ``None`` quando
+    o caractere não é uma letra do alfabeto. Letras acentuadas são normalizadas
+    com NFD, que separa por exemplo ``ç`` em ``c`` + cedilha combinante, de modo
+    que o primeiro ponto de código é a letra base.
     """
     base = unicodedata.normalize("NFD", char)[:1]
     if "a" <= base <= "z" or "A" <= base <= "Z":
@@ -47,44 +49,45 @@ def fold(char: str) -> str | None:
 
 
 def key_offsets(key: str) -> list[int]:
-    """Return the key as a list of 0-25 shifts, ignoring non-alphabet characters."""
+    """Devolve a chave como uma lista de deslocamentos 0-25, ignorando o que não é letra."""
     offsets = [
         ord(letter.lower()) - ord("a")
         for letter in (fold(char) for char in key)
         if letter is not None
     ]
     if not offsets:
-        raise ValueError("Key must contain at least one letter (A-Z).")
+        raise ValueError("A chave deve conter ao menos uma letra (A-Z).")
     return offsets
 
 
 def effective_key(key: str) -> str:
-    """Return the key that is actually used: folded to A-Z, lowercase, letters only."""
+    """Devolve a chave realmente usada: reduzida a A-Z, minúscula, apenas letras."""
     return "".join(chr(offset + ord("a")) for offset in key_offsets(key))
 
 
 def count_letters(text: str) -> int:
-    """Number of characters of ``text`` that belong to the A-Z alphabet."""
+    """Quantidade de caracteres de ``text`` que pertencem ao alfabeto A-Z."""
     return sum(1 for char in text if fold(char) is not None)
 
 
 def _transform(text: str, key: str, sign: int, alphabet: str) -> str:
-    """Shift the letters of ``text`` by the key. ``sign`` is +1 to encode, -1 to decode."""
+    """Desloca as letras de ``text`` pela chave. ``sign`` é +1 para cifrar, -1 para decifrar."""
     if alphabet not in ALPHABETS:
         raise ValueError(
-            f"Unknown alphabet mode {alphabet!r}; expected one of {', '.join(ALPHABETS)}."
+            f"Modo de alfabeto desconhecido: {alphabet!r}; "
+            f"esperado um entre {', '.join(ALPHABETS)}."
         )
 
     offsets = key_offsets(key)
     result = []
-    key_index = 0  # advances only on letters, so the key stays in sync
+    key_index = 0  # avança só nas letras, mantendo a chave sincronizada
 
     for char in text:
         letter = fold(char)
 
         if letter is None:
-            # Not part of the alphabet: kept verbatim (and the key does not
-            # advance) in "preserve" mode, dropped in "strict" mode.
+            # Fora do alfabeto: mantido tal e qual (sem avançar a chave) no modo
+            # "preserve", descartado no modo "strict".
             if alphabet == "preserve":
                 result.append(char)
             continue
@@ -101,10 +104,10 @@ def _transform(text: str, key: str, sign: int, alphabet: str) -> str:
 
 
 def encode(plaintext: str, key: str, alphabet: str = "preserve") -> str:
-    """Encode ``plaintext`` with ``key`` and return the ciphertext."""
+    """Cifra ``plaintext`` com ``key`` e devolve o criptograma."""
     return _transform(plaintext, key, sign=1, alphabet=alphabet)
 
 
 def decode(ciphertext: str, key: str, alphabet: str = "preserve") -> str:
-    """Decode ``ciphertext`` with ``key`` and return the plaintext."""
+    """Decifra ``ciphertext`` com ``key`` e devolve o texto claro."""
     return _transform(ciphertext, key, sign=-1, alphabet=alphabet)

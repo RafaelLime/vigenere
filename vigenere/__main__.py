@@ -1,4 +1,4 @@
-"""Allow running the package with ``python -m vigenere``."""
+"""Permite executar o pacote com ``python -m vigenere``."""
 
 from .cli import main
 

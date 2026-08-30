@@ -1,4 +1,4 @@
-"""Tests for the Vigenère cipher core logic."""
+"""Testes da lógica central da cifra de Vigenère."""
 
 import pytest
 
@@ -6,7 +6,7 @@ from vigenere.cipher import count_letters, decode, effective_key, encode, fold
 
 
 def test_encode_classic_example():
-    # The canonical Vigenère example: ATTACKATDAWN / LEMON -> LXFOPVEFRNHR
+    # Exemplo canônico da cifra: ATTACKATDAWN / LEMON -> LXFOPVEFRNHR
     assert encode("ATTACKATDAWN", "LEMON") == "LXFOPVEFRNHR"
 
 
@@ -26,7 +26,7 @@ def test_preserves_case():
 
 
 def test_accented_letters_are_folded_onto_the_base_letter():
-    # "ação" is ciphered as if it were "acao"; the accents are lost.
+    # "ação" é cifrado como se fosse "acao"; os acentos são perdidos.
     assert encode("ação", "chave") == encode("acao", "chave") == "cjaj"
     assert decode("cjaj", "chave") == "acao"
 
@@ -39,15 +39,15 @@ def test_accent_folding_keeps_case():
 
 
 def test_accented_letters_stay_in_sync_with_the_key():
-    # Every letter consumes exactly one key letter, accented or not.
+    # Toda letra consome exatamente uma letra da chave, acentuada ou não.
     assert encode("aéa", "bcd") == encode("aea", "bcd")
     assert encode("aèa", "bcd") == encode("aea", "bcd")
     assert encode("añn", "bcd") == encode("ann", "bcd")
 
 
 def test_non_letters_pass_through_and_do_not_consume_key():
-    # Spaces/punctuation are untouched and don't advance the key.
-    assert encode("ab cd", "aa") == "ab cd"  # key of all 'a' == no shift
+    # Espaços e pontuação passam intactos e não avançam a chave.
+    assert encode("ab cd", "aa") == "ab cd"  # chave só de 'a' == deslocamento zero
     assert encode("a!b", "bc") == "b!d"
     assert encode("a1b", "bc") == "b1d"
 

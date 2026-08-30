@@ -1,4 +1,4 @@
-"""Tests for the command-line interface."""
+"""Testes da interface de linha de comando."""
 
 import pytest
 
@@ -21,8 +21,8 @@ def test_strict_alphabet_flag(capsys):
 
 
 def test_input_and_output_files(tmp_path, capsys):
-    source = tmp_path / "plain.txt"
-    target = tmp_path / "cipher.txt"
+    source = tmp_path / "mensagem.txt"
+    target = tmp_path / "criptograma.txt"
     source.write_text("Ataque ao amanhecer", encoding="utf-8")
 
     assert main(
@@ -34,34 +34,34 @@ def test_input_and_output_files(tmp_path, capsys):
 
 def test_missing_input_file_is_reported():
     with pytest.raises(SystemExit) as excinfo:
-        main(["encode", "-k", "lemon", "-i", "does-not-exist.txt"])
-    assert "cannot read" in str(excinfo.value)
+        main(["encode", "-k", "lemon", "-i", "nao-existe.txt"])
+    assert "não foi possível ler" in str(excinfo.value)
 
 
 def test_key_without_letters_is_rejected():
     with pytest.raises(SystemExit) as excinfo:
         main(["encode", "abc", "-k", "123"])
-    assert "at least one letter" in str(excinfo.value)
+    assert "ao menos uma letra" in str(excinfo.value)
 
 
 def test_warns_when_the_key_is_reduced(capsys):
     main(["encode", "attack", "-k", "l3e!mon"])
-    assert "the key was reduced to 'lemon'" in capsys.readouterr().err
+    assert "a chave foi reduzida para 'lemon'" in capsys.readouterr().err
 
 
 def test_warns_on_one_letter_key(capsys):
     main(["encode", "attack", "-k", "b"])
-    assert "Caesar cipher" in capsys.readouterr().err
+    assert "cifra de César" in capsys.readouterr().err
 
 
 def test_warns_when_the_text_has_no_letters(capsys):
     main(["encode", "123 !!!", "-k", "lemon"])
-    assert "no A-Z letters" in capsys.readouterr().err
+    assert "não contém letras de A-Z" in capsys.readouterr().err
 
 
 def test_verbose_summary(capsys):
     main(["encode", "Ataque!", "-k", "segredo", "-v"])
     err = capsys.readouterr().err
-    assert "alphabet: preserve" in err
-    assert "key: segredo (length 7)" in err
-    assert "7 characters, 6 of them letters" in err
+    assert "alfabeto: preserve" in err
+    assert "chave: segredo (tamanho 7)" in err
+    assert "7 caracteres, 6 deles letras" in err

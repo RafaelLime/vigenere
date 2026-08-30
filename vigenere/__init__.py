@@ -1,4 +1,4 @@
-"""Vigenère cipher package."""
+"""Pacote da cifra de Vigenère."""
 
 from .cipher import encode, decode
 
