@@ -22,9 +22,9 @@ automaticamente é utilizada. Apenas módulos gerais da biblioteca padrão
 | --- | --- |
 | [`vigenere/cipher.py`](vigenere/cipher.py) | **Parte I.** Cifração e decifração. O núcleo matemático está em `_transform`. |
 | [`vigenere/cli.py`](vigenere/cli.py) | Interface de linha de comando da Parte I (`encode` / `decode`). |
-| [`vigenere/attack.py`](vigenere/attack.py) | **Parte II.** Índice de coincidência, qui-quadrado, tabelas de frequência PT/EN, recuperação da chave. |
-| [`vigenere/integration.py`](vigenere/integration.py) | **Parte II.** Ataque automático (testa idiomas e comprimentos, avalia e refina) e menu interativo. |
-| [`tests/`](tests/) | Testes automatizados da Parte I. |
+| [`vigenere/attack.py`](vigenere/attack.py) | **Parte II.** Primitivas estatísticas: índice de coincidência, separação em colunas, estimativa do comprimento da chave, qui-quadrado e reconstrução da chave. Tabelas de frequência PT/EN. |
+| [`vigenere/integration.py`](vigenere/integration.py) | **Parte II.** Orquestração do ataque (testa idiomas e comprimentos, avalia o resultado e refina a chave) e menu interativo. |
+| [`tests/`](tests/) | Testes automatizados das duas partes. |
 
 ## Instalação
 
@@ -275,10 +275,21 @@ foi ranqueado à frente do 7 pelo IC.
   estimativas estatísticas: quanto mais curto o texto (e quanto maior a chave),
   menos letras por coluna e mais ruído. Nos testes, textos abaixo de ~200 letras
   frequentemente falham.
-- **O programa sempre apresenta a melhor tentativa**, mesmo quando nenhuma é
-  boa. Um score baixo (abaixo de ~0,5) indica que o resultado provavelmente não
-  é confiável — vale conferir o texto decifrado e, se preciso, ajustar
-  `max_key_length` ou `n_tamanhos_candidatos`.
+- **O score pode preferir uma chave errada à correta.** Em formato estrito o
+  único sinal disponível é o qui-quadrado, porque sem espaços o texto decifrado
+  é uma única palavra e a fração de palavras comuns é sempre zero. O
+  qui-quadrado isolado não basta para discriminar: num caso de teste, uma chave
+  com duas letras erradas recebeu score 0,823 contra 0,814 da chave correta.
+  Coberto pelo teste `test_score_should_prefer_the_correct_key`, marcado como
+  `xfail`.
+- **O limiar de aceitação não separa acerto de erro.** `LIMIAR_ACEITACAO = 0,55`
+  quase nunca é cruzado em formato estrito: um texto completamente ilegível,
+  obtido de um criptograma curto, recebe score entre 0,65 e 0,88. Como
+  consequência, o refinamento raramente é acionado e o programa **sempre**
+  apresenta a melhor tentativa sem nenhum aviso de baixa confiança, mesmo
+  quando nenhuma é boa. Coberto pelo teste
+  `test_illegible_result_should_score_below_the_threshold`, marcado como
+  `xfail`.
 - **Acentos não são restaurados**, pois a cifra os reduz à letra base (ver
   Parte I).
 
@@ -291,5 +302,14 @@ pip install -e ".[test]"
 pytest
 ```
 
-Os testes cobrem a Parte I (cifração, decifração, tratamento do alfabeto,
-validação de entradas e a interface de linha de comando).
+| Arquivo | Cobertura |
+| --- | --- |
+| [`tests/test_cipher.py`](tests/test_cipher.py) | Parte I: cifração, decifração, tratamento do alfabeto e dos acentos. |
+| [`tests/test_cli.py`](tests/test_cli.py) | Parte I: interface de linha de comando e validação das entradas. |
+| [`tests/test_attack.py`](tests/test_attack.py) | Parte II: índice de coincidência, separação em colunas, estimativa do comprimento, qui-quadrado e reconstrução da chave. |
+| [`tests/test_integration.py`](tests/test_integration.py) | Parte II: ataque de ponta a ponta em PT e EN, detecção de idioma, refinamento, histórico de tentativas e limites conhecidos. |
+
+Os dois defeitos descritos em *Limitações conhecidas* têm testes marcados como
+`xfail`: eles descrevem o comportamento **correto** e falham de propósito
+enquanto a correção não entra. Quando entrar, viram `XPASS` e devem ser
+convertidos em asserções normais.
