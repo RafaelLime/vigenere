@@ -22,8 +22,8 @@ automaticamente é utilizada. Apenas módulos gerais da biblioteca padrão
 | --- | --- |
 | [`vigenere/cipher.py`](vigenere/cipher.py) | **Parte I.** Cifração e decifração. O núcleo matemático está em `_transform`. |
 | [`vigenere/cli.py`](vigenere/cli.py) | Interface de linha de comando da Parte I (`encode` / `decode`). |
-| [`vigenere/attack.py`](vigenere/attack.py) | **Parte II.** Primitivas estatísticas: índice de coincidência, separação em colunas, estimativa do comprimento da chave, qui-quadrado e reconstrução da chave. Tabelas de frequência PT/EN. |
-| [`vigenere/integration.py`](vigenere/integration.py) | **Parte II.** Orquestração do ataque (testa idiomas e comprimentos, avalia o resultado e refina a chave) e menu interativo. |
+| [`vigenere/attack.py`](vigenere/attack.py) | **Parte II.** Primitivas estatísticas: índice de coincidência, análise de frequência, separação em colunas, estimativa do comprimento da chave, qui-quadrado e reconstrução da chave — esta última também na forma que preserva a evidência de cada escolha (`analyze_columns`). Tabelas de frequência PT/EN. |
+| [`vigenere/integration.py`](vigenere/integration.py) | **Parte II.** Orquestração do ataque (testa idiomas e comprimentos, avalia o resultado e refina a chave), registro dos resultados intermediários de cada etapa e menu interativo. |
 | [`tests/`](tests/) | Testes automatizados das duas partes. |
 
 ## Instalação
@@ -188,6 +188,22 @@ resultado.confiavel           # False quando o resultado não é de fiar
 resultado.alertas             # os motivos, quando não é
 ```
 
+Os resultados intermediários de cada etapa também ficam disponíveis, para
+inspeção ou para compor o relatório:
+
+```python
+resultado.ic_por_tamanho      # IC médio de TODOS os comprimentos examinados
+resultado.total_letras        # letras do criptograma normalizado
+
+tentativa = resultado.melhor
+tentativa.colunas             # a evidência por posição da chave:
+tentativa.colunas[0].length         #   letras nesta coluna
+tentativa.colunas[0].frequencies    #   frequências observadas, da maior à menor
+tentativa.colunas[0].candidates     #   [(letra, χ²), ...] do melhor ao pior
+tentativa.colunas[0].margin         #   folga do vencedor sobre o 2º colocado
+tentativa.trocas              # o que o refinamento mudou, e o ganho de score
+```
+
 O ataque **sempre** devolve algum resultado — não existe "não encontrei".
 Por isso, antes de tomar o texto como resposta, verifique
 `resultado.confiavel`. Em modo `verbose` um aviso destacado é impresso
@@ -199,11 +215,16 @@ vez, usa apenas o idioma escolhido.
 
 ## Metodologia
 
-O ataque segue as etapas pedidas no enunciado:
+O ataque segue as etapas pedidas no enunciado. Cada uma **guarda e mostra os
+seus resultados intermediários**, não apenas o que passa para a etapa seguinte:
+o enunciado (§10) pede que hipóteses testadas e justificativas fiquem visíveis.
 
 **1. Normalização.** O criptograma é reduzido a uma sequência contínua de letras
 `A-Z` (`_clean_for_analysis`), porque a análise por colunas fatia o texto por
-posição e espaços ou pontuação deslocariam os índices.
+posição e espaços ou pontuação deslocariam os índices. O IC do criptograma
+inteiro já é reportado aqui: se estiver próximo ao da linguagem natural, a chave
+tem uma única letra (cifra de César); se estiver próximo ao uniforme, tem mais
+de uma.
 
 **2. Estimativa do comprimento da chave — índice de coincidência.** Para cada
 comprimento `k` de 1 a `max_key_length`, o texto é separado em `k` colunas e
@@ -221,6 +242,12 @@ o IC cai para ≈ 0,038, o de uma distribuição uniforme (1/26). Em vez de acei
 apenas o melhor `k`, o ataque guarda os `n_tamanhos_candidatos` melhores e testa
 todos.
 
+A **tabela completa** (`key_length_scores`) é preservada e impressa, não só os
+vencedores: é ela que justifica a escolha, porque nela se vê o IC saltar nos
+múltiplos do comprimento real e ficar rente ao valor uniforme em todos os
+outros. A barra na saída mede o *excesso* sobre o IC uniforme, e não o IC
+absoluto — sem isso a diferença que decide a etapa fica visualmente invisível.
+
 **3. Recuperação da chave — qui-quadrado.** Para cada coluna, testam-se os 26
 deslocamentos possíveis. Cada um é comparado com a distribuição de frequências
 esperada do idioma pela estatística qui-quadrado:
@@ -232,6 +259,13 @@ esperada do idioma pela estatística qui-quadrado:
 O deslocamento de menor χ² é a letra mais provável da chave naquela posição.
 As tabelas de frequência de PT e EN estão em
 [`attack.py`](vigenere/attack.py), conforme a referência indicada no enunciado.
+
+`analyze_columns` faz essa reconstrução preservando a **evidência de cada
+escolha** (`ColumnReport`): quantas letras a coluna tem, as frequências
+observadas nela, os candidatos disputados com seus χ² e a *folga* do vencedor
+sobre o segundo colocado. A folga é o dado mais informativo do conjunto — uma
+folga pequena significa empate técnico, e marca justamente as posições em que a
+chave pode estar errada e onde o refinamento da etapa 5 tem chance de agir.
 
 **4. Avaliação do resultado.** O texto decifrado recebe um score que combina
 dois sinais independentes: o qui-quadrado do texto inteiro (normalizado) e a
@@ -258,28 +292,93 @@ resultado sem base estatística:
 Havendo qualquer um dos dois, o resultado é apresentado com um aviso explícito
 de baixa confiança, em vez de ser exibido como se fosse a resposta.
 
-**7. Registro do processo.** Com `verbose=True` cada tentativa é impressa, de
-modo que o caminho percorrido fique visível, e não apenas a resposta final.
+**7. Registro do processo.** Com `verbose=True` as etapas são impressas na
+ordem, com os dados que as sustentam: o IC do criptograma, a tabela de IC de
+todos os comprimentos com os candidatos marcados, cada tentativa com sua chave e
+score, as trocas aceitas pelo refinamento com o ganho de cada uma, e a análise
+de frequência posição por posição da tentativa vencedora. Os mesmos dados ficam
+no objeto devolvido (`ic_por_tamanho`, `Tentativa.colunas`, `Tentativa.trocas`),
+para uso programático ou para compor o relatório.
+
+Os rótulos impressos seguem a numeração desta seção. As etapas 4 a 6 não têm
+cabeçalho próprio porque aparecem embutidas: o score na etapa 3, o refinamento
+logo abaixo da tentativa que o acionou, e a verificação de confiança junto ao
+resultado final. A análise por coluna sai rotulada como *etapa 3 em detalhe*, e
+apenas para a tentativa vencedora: as demais já foram justificadas pelo score, e
+imprimir todas afogaria a saída.
 
 ## Exemplo de execução
 
-Criptograma de 616 letras, chave real `segredo`, atacado como português:
+Criptograma de 900 letras em formato estrito, chave real `segredo`, atacado como
+português com `max_key_length=14`:
 
 ```
-[pt] tamanho=14 (IC médio das colunas=0.0979) -> chave='SEGREDOSEGREDO' | score=0.870 (tentativa inicial)
-[pt] tamanho=7  (IC médio das colunas=0.0852) -> chave='SEGREDO'        | score=0.870 (tentativa inicial)
-[pt] tamanho=11 (IC médio das colunas=0.0652) -> chave='REFRGRREDDC'    | score=0.341 (tentativa inicial)
-[pt] tamanho=11 (IC médio das colunas=0.0652) -> chave='eEelGsREDDC'    | score=0.367 (refinamento)
+=== Etapa 1: normalização do criptograma ===
+900 letras utilizáveis (A-Z) de 900 caracteres.
+IC do criptograma inteiro: 0.0471  (uniforme ≈ 0.0385 | texto claro: pt ≈ 0.0781, en ≈ 0.0655)
+  -> IC baixo, próximo ao uniforme: vários deslocamentos foram misturados, ou seja, a chave tem mais de uma letra.
+
+=== Etapa 2: estimativa do tamanho da chave (índice de coincidência) ===
+ tam   IC médio   excesso sobre o IC uniforme (≈ 0.0385)
+   1     0.0471   ######
+   2     0.0467   #####
+   3     0.0466   #####
+   4     0.0468   ######
+   5     0.0468   ######
+   6     0.0467   #####
+   7     0.0805   ############################  <- candidato testado
+   8     0.0462   #####
+   9     0.0470   ######
+  10     0.0465   #####
+  11     0.0471   ######
+  12     0.0472   ######
+  13     0.0480   ######  <- candidato testado
+  14     0.0809   ############################  <- candidato testado
+
+=== Etapa 3: recuperação da chave por idioma e comprimento ===
+[pt] tamanho=14 (IC médio das colunas=0.0809) -> chave='SEGREDOSEGREDO' | score=0.886 (tentativa inicial)
+[pt] tamanho=7 (IC médio das colunas=0.0805) -> chave='SEGREDO' | score=0.886 (tentativa inicial)
+[pt] tamanho=13 (IC médio das colunas=0.0480) -> chave='RRRRRRRDRPPDD' | score=0.288 (tentativa inicial)
+[pt] tamanho=13 (IC médio das colunas=0.0480) -> chave='RSRRRRRDRPPDD' | score=0.296 (refinamento)
+       posição 2: 'R' -> 'S'  (score 0.288 -> 0.296)
+
+=== Etapa 3 em detalhe: análise de frequência por coluna (melhor tentativa) ===
+Chave 'SEGREDOSEGREDO' (pt), posição por posição:
+ pos     n  letra        χ²   folga     letras mais frequentes (cifra→claro)     próximos candidatos
+   1    65      S     15.14   29.1x     S→A 23.1%  G→O 13.8%  A→I 9.2%           F(441.0) D(566.5)
+   2    65      E     26.05    7.1x     W→S 12.3%  H→D 10.8%  I→E 10.8%          P(185.3) D(200.3)
+   3    65      G     11.60   37.5x     G→A 18.5%  K→E 13.8%  X→R 9.2%           R(435.2) F(571.3)
+   4    65      R     25.75   11.3x     F→O 12.3%  V→E 12.3%  Z→I 10.8%          F(292.2) S(308.0)
+   5    64      E     33.62    8.7x     E→A 17.2%  G→C 14.1%  I→E 12.5%          R(291.1) D(295.2)
+   6    64      D     26.73   11.9x     L→I 15.6%  H→E 14.1%  U→R 12.5%          R(318.0) Q(364.8)
+   7    64      O     38.45    8.0x     O→A 14.1%  Q→C 12.5%  S→E 10.9%          N(308.3) B(322.3)
+   8    64      S     40.33   10.7x     A→I 14.1%  J→R 14.1%  K→S 10.9%          F(430.1) T(608.3)
+   9    64      E     39.91    7.6x     M→I 18.8%  E→A 12.5%  G→C 12.5%          S(304.7) R(392.3)
+  10    64      G     22.48   31.5x     G→A 18.8%  O→I 12.5%  X→R 9.4%           R(707.8) P(740.9)
+  11    64      R     40.70    7.4x     R→A 14.1%  T→C 14.1%  Z→I 14.1%          F(301.9) E(376.8)
+  12    64      E     16.08   27.6x     E→A 20.3%  I→E 12.5%  W→S 10.9%          P(443.4) D(599.8)
+  13    64      D     21.82   10.0x     D→A 18.8%  R→O 15.6%  H→E 10.9%          O(217.7) C(366.9)
+  14    64      O     17.39   18.1x     O→A 14.1%  S→E 14.1%  G→S 12.5%          Z(314.4) N(321.7)
 
 === Melhor resultado encontrado ===
-Idioma: pt | Tamanho da chave: 14 | Chave: SEGREDOSEGREDO | Score: 0.870
+Idioma: pt | Tamanho da chave: 14 | Chave: SEGREDOSEGREDO | Score: 0.886
 
-Texto decifrado: ACRIPTOGRAFIAEAPRATICAEOESTUDODETECNICASPARACOMUNICACAO...
+Texto decifrado: ACRIPTOGRAFIAEAPRATICAEOESTUDODETECNICASPARACOMUNICACAOSEGURANAPRESENCADETERCEIROSADVERSARIOSDEM...
 ```
 
-Observe o efeito descrito na próxima seção: `SEGREDOSEGREDO` e `SEGREDO`
-decifram exatamente o mesmo texto e recebem o mesmo score, e o comprimento 14
-foi ranqueado à frente do 7 pelo IC.
+Três coisas para observar nessa saída:
+
+- **A etapa 2 justifica a etapa 3.** Só os comprimentos 7 e 14 se destacam; os
+  demais ficam todos rente ao IC uniforme. Isso é a evidência de que a chave tem
+  7 letras (ou um múltiplo), e não uma afirmação a ser aceita de fora.
+- **`SEGREDOSEGREDO` e `SEGREDO` decifram o mesmo texto** e recebem o mesmo
+  score; o comprimento 14 foi ranqueado à frente do 7 pelo IC. Ver *Limitações
+  conhecidas*, abaixo.
+- **A etapa 4 mostra por que cada letra foi escolhida.** Na posição 1, a letra
+  mais frequente da coluna é `S` (23,1%), que sob a chave `S` decifra como `A` —
+  a letra mais comum do português (14,6%). O χ² do vencedor é 29 vezes menor que
+  o do segundo colocado, ou seja, a coluna decidiu com folga larga. Onde a folga
+  cai abaixo de 1,1x a posição é marcada com `(!)`.
 
 ## Limitações conhecidas
 
@@ -303,6 +402,8 @@ foi ranqueado à frente do 7 pelo IC.
   é uma única palavra e a fração de palavras comuns é sempre zero. O
   qui-quadrado isolado não basta para discriminar: num caso de teste, uma chave
   com duas letras erradas recebeu score 0,823 contra 0,814 da chave correta.
+  A folga por coluna impressa na etapa 4 ajuda a detectar isso na inspeção: as
+  posições erradas são tipicamente as de folga pequena.
   Coberto pelo teste `test_score_should_prefer_the_correct_key`, marcado como
   `xfail`.
 - **O limiar de aceitação não separa acerto de erro.** `LIMIAR_ACEITACAO = 0,55`
@@ -329,8 +430,8 @@ pytest
 | --- | --- |
 | [`tests/test_cipher.py`](tests/test_cipher.py) | Parte I: cifração, decifração, tratamento do alfabeto e dos acentos. |
 | [`tests/test_cli.py`](tests/test_cli.py) | Parte I: interface de linha de comando e validação das entradas. |
-| [`tests/test_attack.py`](tests/test_attack.py) | Parte II: índice de coincidência, separação em colunas, estimativa do comprimento, qui-quadrado e reconstrução da chave. |
-| [`tests/test_integration.py`](tests/test_integration.py) | Parte II: ataque de ponta a ponta em PT e EN, detecção de idioma, refinamento, histórico de tentativas e limites conhecidos. |
+| [`tests/test_attack.py`](tests/test_attack.py) | Parte II: índice de coincidência, análise de frequência, separação em colunas, estimativa do comprimento, qui-quadrado, reconstrução da chave e a evidência por coluna. |
+| [`tests/test_integration.py`](tests/test_integration.py) | Parte II: ataque de ponta a ponta em PT e EN, detecção de idioma, refinamento, resultados intermediários de cada etapa (tabela de IC, evidência por coluna, trocas do refinamento), saída verbosa e limites conhecidos. |
 
 Os dois defeitos descritos em *Limitações conhecidas* têm testes marcados como
 `xfail`: eles descrevem o comportamento **correto** e falham de propósito

@@ -14,6 +14,7 @@ from vigenere.integration import (
     _score_candidate,
     resolver_criptograma,
 )
+from vigenere.attack import calculate_ic
 
 from textos import (
     ENGLISH_LONG,
@@ -425,3 +426,183 @@ def test_illegible_result_should_score_below_the_threshold():
     # O texto recuperado é lixo, então o score deveria sinalizar isso.
     assert resultado.melhor.texto != _normalizado(PORTUGUESE_TEXT[:80])
     assert resultado.melhor.score < LIMIAR_ACEITACAO
+
+
+# --- Resultados intermediários ------------------------------------------------
+#
+# O enunciado (§10) pede que hipóteses testadas e justificativas fiquem
+# visíveis, não apenas a resposta final. Os testes abaixo garantem que a
+# evidência de cada etapa é preservada no resultado, e não descartada.
+
+
+def test_result_carries_the_full_ic_table():
+    criptograma = encode(PORTUGUESE_LONG, "segredo", alphabet="strict")
+    resultado = resolver_criptograma(
+        criptograma, idiomas=("pt",), max_key_length=20, verbose=False
+    )
+
+    # A tabela completa, não só os comprimentos testados.
+    assert [k for k, _ic in resultado.ic_por_tamanho] == list(range(1, 21))
+
+
+def test_the_tried_lengths_are_the_best_of_the_ic_table():
+    criptograma = encode(PORTUGUESE_LONG, "segredo", alphabet="strict")
+    resultado = resolver_criptograma(
+        criptograma, idiomas=("pt",), n_tamanhos_candidatos=3, verbose=False
+    )
+
+    melhores = sorted(resultado.ic_por_tamanho, key=lambda item: item[1], reverse=True)
+    esperados = {k for k, _ic in melhores[:3]}
+    tentados = {t.tamanho_chave for t in resultado.tentativas}
+    assert tentados == esperados
+
+
+def test_result_reports_the_normalized_length():
+    criptograma = encode(PORTUGUESE_TEXT, "segredo", alphabet="preserve")
+    resultado = resolver_criptograma(criptograma, idiomas=("pt",), verbose=False)
+
+    assert resultado.total_letras == len(_clean_for_analysis(criptograma))
+
+
+def test_every_attempt_carries_the_evidence_of_each_key_letter():
+    criptograma = encode(PORTUGUESE_LONG, "segredo", alphabet="strict")
+    resultado = resolver_criptograma(criptograma, idiomas=("pt",), verbose=False)
+
+    for tentativa in resultado.tentativas:
+        # Uma coluna por posição da chave, e a chave sai dessa evidência.
+        assert len(tentativa.colunas) == tentativa.tamanho_chave
+        for coluna in tentativa.colunas:
+            # Cada escolha traz o candidato vencedor, os concorrentes e as
+            # frequências observadas que os separaram.
+            assert coluna.key_letter == coluna.candidates[0][0]
+            assert len(coluna.candidates) >= 2
+            assert coluna.frequencies
+
+
+def test_the_key_of_an_initial_attempt_is_the_column_evidence():
+    criptograma = encode(PORTUGUESE_LONG, "segredo", alphabet="strict")
+    resultado = resolver_criptograma(criptograma, idiomas=("pt",), verbose=False)
+
+    for tentativa in resultado.tentativas:
+        if tentativa.refinada:
+            continue
+        assert tentativa.chave == "".join(c.key_letter for c in tentativa.colunas)
+
+
+def test_the_columns_partition_the_cryptogram():
+    criptograma = encode(PORTUGUESE_LONG, "segredo", alphabet="strict")
+    resultado = resolver_criptograma(criptograma, idiomas=("pt",), verbose=False)
+
+    for tentativa in resultado.tentativas:
+        total = sum(coluna.length for coluna in tentativa.colunas)
+        assert total == resultado.total_letras
+
+
+def test_refinement_records_every_swap_it_accepted():
+    criptograma = encode(PORTUGUESE_LONG, "segredo", alphabet="strict")
+    resultado = resolver_criptograma(criptograma, idiomas=("pt",), verbose=False)
+
+    refinadas = [t for t in resultado.tentativas if t.refinada]
+    assert refinadas
+
+    for refinada in refinadas:
+        inicial = next(
+            t
+            for t in resultado.tentativas
+            if not t.refinada
+            and t.idioma == refinada.idioma
+            and t.tamanho_chave == refinada.tamanho_chave
+        )
+        # As trocas registradas explicam exatamente a diferença entre a
+        # chave inicial e a refinada.
+        posicoes_trocadas = {troca.posicao for troca in refinada.trocas}
+        divergentes = {
+            i
+            for i, (antes, depois) in enumerate(zip(inicial.chave, refinada.chave))
+            if antes != depois
+        }
+        assert divergentes <= posicoes_trocadas
+        # Toda troca aceita melhorou o score.
+        for troca in refinada.trocas:
+            assert troca.score_depois > troca.score_antes
+
+
+def test_the_recovered_key_is_uppercase_even_after_refinement():
+    # A chave é exibida no log e no resultado; caso misto ('eEelGs') só
+    # confunde quem lê.
+    criptograma = encode(PORTUGUESE_LONG, "segredo", alphabet="strict")
+    resultado = resolver_criptograma(criptograma, idiomas=("pt",), verbose=False)
+
+    for tentativa in resultado.tentativas:
+        assert tentativa.chave.isupper()
+
+
+# --- Saída verbosa das etapas -------------------------------------------------
+
+
+def test_verbose_prints_every_stage(capsys):
+    criptograma = encode(PORTUGUESE_LONG, "segredo", alphabet="strict")
+    resolver_criptograma(criptograma, idiomas=("pt",), verbose=True)
+
+    saida = capsys.readouterr().out
+    # Os rótulos seguem a numeração das etapas descritas no README; a
+    # análise por coluna é o detalhe da etapa 3, não uma etapa nova.
+    for etapa in (
+        "Etapa 1: normalização",
+        "Etapa 2: estimativa do tamanho da chave",
+        "Etapa 3: recuperação da chave",
+        "Etapa 3 em detalhe: análise de frequência por coluna",
+    ):
+        assert etapa in saida
+
+
+def test_verbose_prints_the_whole_ic_table(capsys):
+    criptograma = encode(PORTUGUESE_LONG, "segredo", alphabet="strict")
+    resolver_criptograma(
+        criptograma, idiomas=("pt",), max_key_length=8, verbose=True
+    )
+
+    saida = capsys.readouterr().out
+    # Não só os comprimentos vencedores: a tabela inteira é a justificativa.
+    for tamanho in range(1, 9):
+        assert f"\n{tamanho:>4}  " in saida
+    assert "candidato testado" in saida
+
+
+def test_verbose_prints_the_frequency_analysis_per_column(capsys):
+    criptograma = encode(PORTUGUESE_LONG, "segredo", alphabet="strict")
+    resolver_criptograma(criptograma, idiomas=("pt",), verbose=True)
+
+    saida = capsys.readouterr().out
+    assert "posição por posição" in saida
+    assert "letras mais frequentes" in saida
+    # A letra mais frequente da coluna e o que ela decifra.
+    assert "→" in saida
+
+
+def test_verbose_prints_the_ic_of_the_whole_cryptogram(capsys):
+    criptograma = encode(PORTUGUESE_LONG, "segredo", alphabet="strict")
+    resolver_criptograma(criptograma, idiomas=("pt",), verbose=True)
+
+    saida = capsys.readouterr().out
+    ic = calculate_ic(_clean_for_analysis(criptograma))
+    assert f"{ic:.4f}" in saida
+    assert "letras utilizáveis" in saida
+
+
+def test_verbose_explains_each_refinement_swap(capsys):
+    criptograma = encode(PORTUGUESE_LONG, "segredo", alphabet="strict")
+    resolver_criptograma(criptograma, idiomas=("pt",), verbose=True)
+
+    saida = capsys.readouterr().out
+    assert "posição" in saida
+    # Cada troca mostra o ganho de score que a justificou.
+    assert "score 0." in saida
+
+
+def test_degenerate_input_does_not_break_the_verbose_output(capsys):
+    resolver_criptograma("", idiomas=("pt",), verbose=True)
+
+    saida = capsys.readouterr().out
+    # Sem letras não há conclusão estatística a tirar do IC.
+    assert "letras insuficientes" in saida

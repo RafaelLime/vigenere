@@ -7,9 +7,13 @@ import pytest
 from vigenere.attack import (
     ENGLISH_FREQ,
     PORTUGUESE_FREQ,
+    ColumnReport,
+    analyze_columns,
     calculate_ic,
     candidate_key_lengths,
     find_key_character,
+    key_length_scores,
+    letter_frequencies,
     recover_key,
     shift_candidates,
     split_columns,
@@ -188,3 +192,120 @@ def test_recover_key_returns_one_letter_per_key_position():
     cifrado = encode(_strict(PORTUGUESE_TEXT), "segredo", alphabet="strict")
     for comprimento in (1, 5, 7, 14):
         assert len(recover_key(cifrado, comprimento, PORTUGUESE_FREQ)) == comprimento
+
+
+# --- Análise de frequência ---------------------------------------------------
+
+
+def test_letter_frequencies_are_ordered_and_sum_to_one():
+    frequencias = letter_frequencies(_strict(PORTUGUESE_TEXT))
+
+    fracoes = [f for _letra, f in frequencias]
+    assert fracoes == sorted(fracoes, reverse=True)
+    assert sum(fracoes) == pytest.approx(1.0)
+    # Em português a letra mais comum é 'A'.
+    assert frequencias[0][0] == "A"
+
+
+def test_letter_frequencies_of_empty_text_is_empty():
+    assert letter_frequencies("") == []
+
+
+def test_letter_frequencies_counts_each_letter():
+    assert letter_frequencies("AAB") == [("A", pytest.approx(2 / 3)), ("B", pytest.approx(1 / 3))]
+
+
+# --- Tabela completa de IC por comprimento -----------------------------------
+
+
+def test_key_length_scores_covers_every_length_in_order():
+    cifrado = encode(_strict(PORTUGUESE_TEXT), "segredo", alphabet="strict")
+    tabela = key_length_scores(cifrado, max_length=20)
+
+    assert [k for k, _ic in tabela] == list(range(1, 21))
+
+
+def test_key_length_scores_peaks_at_multiples_of_the_real_length():
+    cifrado = encode(_strict(PORTUGUESE_TEXT), "segredo", alphabet="strict")
+    por_comprimento = dict(key_length_scores(cifrado, max_length=20))
+
+    # Múltiplos de 7 preservam o IC do idioma; os demais ficam perto do
+    # valor de uma distribuição uniforme (1/26 ≈ 0,038).
+    multiplos = [por_comprimento[k] for k in (7, 14)]
+    outros = [ic for k, ic in por_comprimento.items() if k % 7 != 0]
+    assert min(multiplos) > max(outros)
+
+
+def test_candidate_key_lengths_is_the_top_of_the_full_table():
+    cifrado = encode(_strict(PORTUGUESE_TEXT), "segredo", alphabet="strict")
+    tabela = key_length_scores(cifrado, max_length=20)
+    melhores = sorted(tabela, key=lambda item: item[1], reverse=True)[:3]
+
+    assert candidate_key_lengths(cifrado, max_length=20, top_n=3) == melhores
+
+
+# --- Evidência por coluna ----------------------------------------------------
+
+
+def test_analyze_columns_agrees_with_recover_key():
+    cifrado = encode(_strict(PORTUGUESE_TEXT), "segredo", alphabet="strict")
+    relatorios = analyze_columns(cifrado, 7, PORTUGUESE_FREQ)
+
+    # analyze_columns é o motor de recover_key: as letras têm de coincidir.
+    assert "".join(r.key_letter for r in relatorios) == recover_key(
+        cifrado, 7, PORTUGUESE_FREQ
+    )
+
+
+def test_analyze_columns_reports_one_column_per_key_position():
+    cifrado = encode(_strict(PORTUGUESE_TEXT), "segredo", alphabet="strict")
+    relatorios = analyze_columns(cifrado, 7, PORTUGUESE_FREQ)
+
+    assert [r.position for r in relatorios] == list(range(7))
+    assert sum(r.length for r in relatorios) == len(cifrado)
+
+
+def test_analyze_columns_keeps_the_evidence_of_each_choice():
+    cifrado = encode(_strict(PORTUGUESE_TEXT), "segredo", alphabet="strict")
+
+    for relatorio in analyze_columns(cifrado, 7, PORTUGUESE_FREQ, top_n=3):
+        # A letra escolhida é o candidato de menor qui-quadrado.
+        assert relatorio.key_letter == relatorio.candidates[0][0]
+        quis = [chi for _letra, chi in relatorio.candidates]
+        assert quis == sorted(quis)
+        # As frequências observadas descrevem a própria coluna.
+        assert sum(f for _letra, f in relatorio.frequencies) == pytest.approx(1.0)
+
+
+def test_analyze_columns_always_allows_computing_the_margin():
+    cifrado = encode(_strict(PORTUGUESE_TEXT), "segredo", alphabet="strict")
+
+    # Mesmo pedindo um único candidato, guarda dois: sem o segundo
+    # colocado não há como medir a folga do vencedor.
+    for relatorio in analyze_columns(cifrado, 7, PORTUGUESE_FREQ, top_n=1):
+        assert len(relatorio.candidates) >= 2
+        assert relatorio.margin > 0
+
+
+def test_margin_is_zero_when_there_is_nothing_to_compare():
+    vazio = ColumnReport(
+        position=0, length=0, key_letter="A", candidates=[("A", 0.0)], frequencies=[]
+    )
+    assert vazio.margin == 0.0
+
+    empatado = ColumnReport(
+        position=0,
+        length=0,
+        key_letter="A",
+        candidates=[("A", 0.0), ("B", 0.0)],
+        frequencies=[],
+    )
+    assert empatado.margin == 0.0
+
+
+def test_analyze_columns_survives_a_key_longer_than_the_text():
+    # Colunas vazias não podem quebrar a análise.
+    relatorios = analyze_columns("ABC", 10, PORTUGUESE_FREQ)
+
+    assert len(relatorios) == 10
+    assert all(r.margin == 0.0 for r in relatorios if r.length == 0)

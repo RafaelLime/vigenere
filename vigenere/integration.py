@@ -5,10 +5,12 @@ de ponta a ponta: estima os comprimentos de chave mais prováveis, testa
 cada idioma e comprimento candidato, decifra, avalia se o texto obtido
 faz sentido e refina a chave quando o resultado é fraco.
 
-Além do resultado final, devolve o histórico de todas as tentativas
-(:class:`ResultadoAtaque`) e, com ``verbose=True``, imprime o caminho
-percorrido — o enunciado pede que hipóteses testadas e justificativas
-fiquem visíveis, não apenas a resposta.
+Além do resultado final, devolve todos os resultados intermediários
+(:class:`ResultadoAtaque`): a tabela de IC por comprimento de chave, o
+histórico de cada tentativa, a evidência por coluna que sustenta cada
+letra da chave e as trocas feitas no refinamento. Com ``verbose=True``
+tudo isso é impresso etapa por etapa — o enunciado pede que hipóteses
+testadas e justificativas fiquem visíveis, não apenas a resposta.
 
 Também expõe o menu interativo do programa (:func:`main`), executável com
 ``python -m vigenere.integration``.
@@ -28,9 +30,10 @@ if __package__ in (None, ""):
     from vigenere.attack import (
         ENGLISH_FREQ,
         PORTUGUESE_FREQ,
+        ColumnReport,
+        analyze_columns,
         calculate_ic,
-        candidate_key_lengths,
-        recover_key,
+        key_length_scores,
         shift_candidates,
         split_columns,
     )
@@ -39,9 +42,10 @@ else:
     from .attack import (
         ENGLISH_FREQ,
         PORTUGUESE_FREQ,
+        ColumnReport,
+        analyze_columns,
         calculate_ic,
-        candidate_key_lengths,
-        recover_key,
+        key_length_scores,
         shift_candidates,
         split_columns,
     )
@@ -152,8 +156,25 @@ def _score_candidate(plaintext: str, idioma: str) -> float:
 # Registro do processo de busca (mostra o "caminho" percorrido, não só a resposta final).
 
 @dataclass
+class Troca:
+    """Uma substituição aceita pelo refinamento, com o ganho que a justificou."""
+
+    posicao: int
+    de: str
+    para: str
+    score_antes: float
+    score_depois: float
+
+
+@dataclass
 class Tentativa:
-    """Uma tentativa de decifração testada durante o ataque."""
+    """Uma tentativa de decifração testada durante o ataque.
+
+    Além do resultado (``chave``, ``texto``, ``score``), carrega a
+    evidência que o produziu: ``colunas`` traz, por posição da chave, as
+    frequências observadas e os candidatos disputados; ``trocas`` registra
+    o que o refinamento mudou e por quê.
+    """
 
     idioma: str
     tamanho_chave: int
@@ -162,15 +183,25 @@ class Tentativa:
     texto: str
     score: float
     refinada: bool = False
+    colunas: list[ColumnReport] = field(default_factory=list)
+    trocas: list[Troca] = field(default_factory=list)
 
 
 @dataclass
 class ResultadoAtaque:
-    """Resultado completo: a melhor tentativa e o histórico de todas."""
+    """Resultado completo: a melhor tentativa e todo o caminho até ela.
+
+    ``ic_por_tamanho`` é a tabela de IC médio de *todos* os comprimentos
+    examinados, da qual saíram os candidatos testados; ``total_letras`` é
+    o tamanho do criptograma normalizado, que determina quantas letras
+    cada coluna recebeu.
+    """
 
     melhor: Tentativa
     tentativas: list[Tentativa] = field(default_factory=list)
     alertas: list[str] = field(default_factory=list)
+    ic_por_tamanho: list[tuple[int, float]] = field(default_factory=list)
+    total_letras: int = 0
 
     @property
     def confiavel(self) -> bool:
@@ -189,6 +220,134 @@ def _log_tentativa(tentativa: Tentativa) -> None:
         f"(IC médio das colunas={tentativa.ic_medio:.4f}) -> "
         f"chave='{tentativa.chave}' | score={tentativa.score:.3f} ({etapa})"
     )
+
+def _log_normalizacao(original: str, cleaned: str) -> None:
+    """Etapa 1: o que sobrou do criptograma e o que seu IC já revela."""
+    ic = calculate_ic(cleaned)
+    print(
+        f"{len(cleaned)} letras utilizáveis (A-Z) de {len(original)} caracteres.\n"
+        f"IC do criptograma inteiro: {ic:.4f}  "
+        f"(uniforme ≈ {1 / 26:.4f} | texto claro: pt ≈ {_ic_esperado('pt'):.4f}, "
+        f"en ≈ {_ic_esperado('en'):.4f})"
+    )
+    if len(cleaned) < 2:
+        # Sem pares de letras o IC não é definido; não há o que concluir.
+        print("  -> letras insuficientes para uma análise estatística.")
+        return
+
+    if ic >= _ic_esperado("en") * (1 - TOLERANCIA_IC):
+        print(
+            "  -> IC alto, próximo ao de linguagem natural: compatível com uma "
+            "chave de uma única letra (cifra de César)."
+        )
+    else:
+        print(
+            "  -> IC baixo, próximo ao uniforme: vários deslocamentos foram "
+            "misturados, ou seja, a chave tem mais de uma letra."
+        )
+
+
+def _log_tabela_ic(
+    ic_por_tamanho: list[tuple[int, float]], escolhidos: list[tuple[int, float]]
+) -> None:
+    """Etapa 2: a tabela de IC que justifica os comprimentos escolhidos.
+
+    Mostra *todos* os comprimentos examinados, não apenas os vencedores:
+    é o que permite ver o IC saltar nos múltiplos do comprimento real e
+    ficar rente ao valor uniforme nos demais.
+    """
+    if not ic_por_tamanho:
+        return
+
+    candidatos = {tamanho for tamanho, _ic in escolhidos}
+    ic_maximo = max(ic for _tamanho, ic in ic_por_tamanho)
+    ic_uniforme = 1 / 26
+    largura_barra = 28
+
+    # A barra mede o *excesso* de IC sobre o valor de uma distribuição
+    # uniforme, não o IC absoluto. Todo comprimento errado já parte de
+    # ≈ 0,038; medir a partir daí é o que faz o sinal aparecer.
+    escala = ic_maximo - ic_uniforme
+
+    print(
+        f"{'tam':>4}  {'IC médio':>9}   "
+        f"excesso sobre o IC uniforme (≈ {ic_uniforme:.4f})"
+    )
+    for tamanho, ic in ic_por_tamanho:
+        if escala > 0:
+            blocos = max(0, round((ic - ic_uniforme) / escala * largura_barra))
+        else:
+            blocos = 0
+        marca = "  <- candidato testado" if tamanho in candidatos else ""
+        print(f"{tamanho:>4}  {ic:>9.4f}   {'#' * blocos}{marca}".rstrip())
+
+
+def _log_colunas(tentativa: Tentativa) -> None:
+    """Etapa 4: a análise de frequência que sustenta cada letra da chave.
+
+    Por posição da chave: quantas letras a coluna tem, a letra escolhida,
+    seu qui-quadrado, a folga sobre o segundo colocado, as letras mais
+    frequentes da coluna (com o que cada uma decifra) e os candidatos
+    seguintes. Colunas de folga pequena são marcadas: são as posições em
+    que a chave pode estar errada.
+    """
+    if not tentativa.colunas:
+        return
+
+    print(
+        f"Chave '{tentativa.chave}' ({tentativa.idioma}), posição por posição:\n"
+        f"{'pos':>4} {'n':>5} {'letra':>6} {'χ²':>9} {'folga':>7}     "
+        f"{'letras mais frequentes (cifra→claro)':<40} próximos candidatos"
+    )
+
+    for coluna in tentativa.colunas:
+        deslocamento = ord(coluna.key_letter) - ord("A")
+        # Mostrar o que as letras mais frequentes decifram torna visível o
+        # raciocínio: a mais comum da coluna deve cair numa letra comum do
+        # idioma ('A' ou 'E' em português).
+        frequentes = "  ".join(
+            f"{letra}→{chr((ord(letra) - ord('A') - deslocamento) % 26 + ord('A'))}"
+            f" {fracao:.1%}"
+            for letra, fracao in coluna.frequencies[:3]
+        )
+        proximos = " ".join(
+            f"{letra}({chi:.1f})" for letra, chi in coluna.candidates[1:3]
+        )
+        # Folga pequena = empate técnico entre deslocamentos; é onde o
+        # refinamento tem chance de corrigir a chave. Expressa como razão
+        # ("o segundo colocado é 29x pior") em vez de porcentagem, que
+        # nesses casos chega a quatro dígitos e deixa de comunicar.
+        aviso = " (!)" if coluna.margin < 0.10 else ""
+
+        print(
+            (
+                f"{coluna.position + 1:>4} {coluna.length:>5} {coluna.key_letter:>6} "
+                f"{coluna.candidates[0][1]:>9.2f} {1 + coluna.margin:>6.1f}x{aviso:<4} "
+                f"{frequentes:<40} {proximos}"
+            ).rstrip()
+        )
+
+    indecisas = [c.position + 1 for c in tentativa.colunas if c.margin < 0.10]
+    if indecisas:
+        print(
+            f"  (!) folga abaixo de 10% nas posições {indecisas}: o "
+            "qui-quadrado não decidiu com clareza nessas colunas."
+        )
+
+
+def _log_trocas(tentativa: Tentativa) -> None:
+    """Etapa 5: o que a busca local mudou, e o ganho que justificou cada troca."""
+    if not tentativa.trocas:
+        print("       nenhuma troca melhorou o score; a chave permaneceu igual.")
+        return
+
+    for troca in tentativa.trocas:
+        print(
+            f"       posição {troca.posicao + 1}: "
+            f"'{troca.de}' -> '{troca.para}'  "
+            f"(score {troca.score_antes:.3f} -> {troca.score_depois:.3f})"
+        )
+
 
 # Avaliação da confiança do resultado.
 #
@@ -269,11 +428,16 @@ def _tentar_idioma_e_tamanho(
     """
     freq = _freq_for(idioma)
 
-    chave = recover_key(cleaned, tamanho, freq)
+    # analyze_columns faz o mesmo que recover_key, mas devolve também a
+    # evidência de cada coluna (frequências, candidatos, margem).
+    colunas = analyze_columns(cleaned, tamanho, freq)
+    chave = "".join(coluna.key_letter for coluna in colunas)
     texto = decode(original, chave, alphabet="preserve")
     score = _score_candidate(texto, idioma)
 
-    return Tentativa(idioma, tamanho, ic_medio, chave, texto, score)
+    return Tentativa(
+        idioma, tamanho, ic_medio, chave, texto, score, colunas=colunas
+    )
 
 
 def _refinar(
@@ -287,23 +451,37 @@ def _refinar(
     freq = _freq_for(tentativa.idioma)
     colunas = split_columns(cleaned, tentativa.tamanho_chave)
 
-    melhor_chave = list(tentativa.chave)
+    # A chave vem em maiúsculas de analyze_columns; as substituições
+    # seguem o mesmo caso, para que a chave exibida seja homogênea.
+    melhor_chave = list(tentativa.chave.upper())
     melhor_score = tentativa.score
+    trocas: list[Troca] = []
 
     for posicao, coluna in enumerate(colunas):
         candidatos = shift_candidates(coluna, freq, top_n_por_posicao)
         for letra_candidata, _qui_quadrado in candidatos:
-            if letra_candidata.lower() == melhor_chave[posicao]:
+            if letra_candidata == melhor_chave[posicao]:
                 continue  # já é a letra atual nessa posição
 
             chave_teste = melhor_chave.copy()
-            chave_teste[posicao] = letra_candidata.lower()
+            chave_teste[posicao] = letra_candidata
             chave_teste_str = "".join(chave_teste)
 
             texto_teste = decode(original, chave_teste_str, alphabet="preserve")
             score_teste = _score_candidate(texto_teste, tentativa.idioma)
 
             if score_teste > melhor_score:
+                # Registra a troca aceita: é a justificativa da mudança
+                # de chave, e o que diferencia esta tentativa da inicial.
+                trocas.append(
+                    Troca(
+                        posicao=posicao,
+                        de=melhor_chave[posicao],
+                        para=letra_candidata,
+                        score_antes=melhor_score,
+                        score_depois=score_teste,
+                    )
+                )
                 melhor_chave = chave_teste
                 melhor_score = score_teste
 
@@ -317,6 +495,8 @@ def _refinar(
         texto=texto_final,
         score=melhor_score,
         refinada=True,
+        colunas=tentativa.colunas,
+        trocas=trocas,
     )
 
 
@@ -338,10 +518,27 @@ def resolver_criptograma(
     ``ResultadoAtaque.confiavel`` (ou ``.alertas``) para saber se ele tem
     base estatística para ser levado a sério.
     """
+    # Etapa 1 — normalização.
     cleaned = _clean_for_analysis(ciphertext)
-    tamanhos_candidatos = candidate_key_lengths(
-        cleaned, max_key_length, n_tamanhos_candidatos
-    )
+    if verbose:
+        print("=== Etapa 1: normalização do criptograma ===")
+        _log_normalizacao(ciphertext, cleaned)
+
+    # Etapa 2 — estimativa do tamanho da chave. A tabela completa é
+    # guardada (e impressa) porque é ela que justifica os candidatos; os
+    # candidatos são simplesmente os melhores comprimentos dela.
+    ic_por_tamanho = key_length_scores(cleaned, max_key_length)
+    tamanhos_candidatos = sorted(
+        ic_por_tamanho, key=lambda item: item[1], reverse=True
+    )[:n_tamanhos_candidatos]
+    if verbose:
+        print("\n=== Etapa 2: estimativa do tamanho da chave (índice de coincidência) ===")
+        _log_tabela_ic(ic_por_tamanho, tamanhos_candidatos)
+
+    # Etapa 3 — recuperação da chave para cada idioma e comprimento
+    # candidato, com refinamento (etapa 5) das tentativas fracas.
+    if verbose:
+        print("\n=== Etapa 3: recuperação da chave por idioma e comprimento ===")
 
     tentativas: list[Tentativa] = []
 
@@ -359,11 +556,22 @@ def resolver_criptograma(
                 tentativas.append(refinada)
                 if verbose:
                     _log_tentativa(refinada)
+                    _log_trocas(refinada)
 
     melhor = max(tentativas, key=lambda t: t.score)
     alertas = _alertas_de_confianca(melhor, len(cleaned))
 
     if verbose:
+        # A evidência por coluna da tentativa vencedora — o detalhe da
+        # etapa 3, não uma etapa nova. Fica no fim, e só para a vencedora,
+        # para não afogar a saída: as demais já foram justificadas pelo
+        # score acima.
+        print(
+            "\n=== Etapa 3 em detalhe: análise de frequência por coluna "
+            "(melhor tentativa) ==="
+        )
+        _log_colunas(melhor)
+
         print("\n=== Melhor resultado encontrado ===")
         print(
             f"Idioma: {melhor.idioma} | Tamanho da chave: {melhor.tamanho_chave} "
@@ -373,7 +581,13 @@ def resolver_criptograma(
             _log_alertas(alertas)
         print(f"\nTexto decifrado: {melhor.texto}")
 
-    return ResultadoAtaque(melhor=melhor, tentativas=tentativas, alertas=alertas)
+    return ResultadoAtaque(
+        melhor=melhor,
+        tentativas=tentativas,
+        alertas=alertas,
+        ic_por_tamanho=ic_por_tamanho,
+        total_letras=len(cleaned),
+    )
 
 
 """
