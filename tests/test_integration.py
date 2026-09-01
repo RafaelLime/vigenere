@@ -5,10 +5,12 @@ import pytest
 from vigenere.cipher import decode, encode
 from vigenere.integration import (
     LIMIAR_ACEITACAO,
+    MIN_LETRAS_POR_COLUNA,
     ResultadoAtaque,
     Tentativa,
     _clean_for_analysis,
     _common_word_ratio,
+    _ic_esperado,
     _score_candidate,
     resolver_criptograma,
 )
@@ -276,6 +278,111 @@ def test_a_key_longer_than_max_key_length_is_not_found():
     assert resultado.melhor.texto != _normalizado(PORTUGUESE_LONG)
 
 
+# --- Avaliação da confiança do resultado -------------------------------------
+
+
+def test_ic_esperado_matches_the_frequency_tables():
+    # IC teórico = soma dos quadrados das frequências das letras.
+    assert _ic_esperado("pt") == pytest.approx(0.078, abs=0.002)
+    assert _ic_esperado("en") == pytest.approx(0.065, abs=0.002)
+
+
+@pytest.mark.parametrize(
+    "text, idioma, key",
+    [(PORTUGUESE_LONG, "pt", "segredo"), (ENGLISH_LONG, "en", "lemon")],
+    ids=["pt", "en"],
+)
+def test_a_successful_attack_reports_no_warnings(text, idioma, key):
+    criptograma = encode(text, key, alphabet="strict")
+    resultado = resolver_criptograma(
+        criptograma, idiomas=(idioma,), verbose=False
+    )
+
+    assert resultado.melhor.texto == _normalizado(text)
+    assert resultado.alertas == []
+    assert resultado.confiavel
+
+
+@pytest.mark.parametrize("n", [40, 60, 80])
+def test_a_short_cryptogram_is_flagged_as_unreliable(n):
+    # Poucas letras por coluna: a análise de frequência superajusta e
+    # produz um texto que imita as frequências do idioma sem ser
+    # linguagem real. O resultado não pode ser apresentado como sucesso.
+    claro = _normalizado(PORTUGUESE_LONG)[:n]
+    resultado = resolver_criptograma(
+        encode(claro, "segredo", alphabet="strict"), idiomas=("pt",), verbose=False
+    )
+
+    assert resultado.melhor.texto != claro  # de fato falhou
+    assert not resultado.confiavel  # e o programa avisa
+    assert resultado.alertas
+
+
+def test_a_key_longer_than_the_search_limit_is_flagged():
+    criptograma = encode(
+        PORTUGUESE_LONG, "chavemuitolongaparaobuscapadrao", alphabet="strict"
+    )
+    resultado = resolver_criptograma(
+        criptograma, idiomas=("pt",), max_key_length=20, verbose=False
+    )
+
+    assert resultado.melhor.texto != _normalizado(PORTUGUESE_LONG)
+    assert not resultado.confiavel
+    # A chave errada deixa o texto misturando deslocamentos, e o IC cai.
+    assert any("abaixo do esperado" in a for a in resultado.alertas)
+
+
+def test_insufficient_sample_is_reported_with_the_column_size():
+    criptograma = encode("Ataque ao amanhecer", "segredo", alphabet="strict")
+    resultado = resolver_criptograma(criptograma, idiomas=("pt",), verbose=False)
+
+    assert any("letras por coluna" in a for a in resultado.alertas)
+    assert any(str(MIN_LETRAS_POR_COLUNA) in a for a in resultado.alertas)
+
+
+def test_overfitted_columns_are_reported():
+    # Com colunas muito curtas o ataque força as frequências e o IC do
+    # texto decifrado sobe acima do natural — sinal de superajuste.
+    claro = _normalizado(PORTUGUESE_LONG)[:40]
+    resultado = resolver_criptograma(
+        encode(claro, "segredo", alphabet="strict"), idiomas=("pt",), verbose=False
+    )
+
+    assert any("acima do esperado" in a for a in resultado.alertas)
+
+
+def test_warning_is_printed_before_the_plaintext(capsys):
+    criptograma = encode("Ataque ao amanhecer", "segredo", alphabet="strict")
+    resolver_criptograma(criptograma, idiomas=("pt",), verbose=True)
+
+    saida = capsys.readouterr().out
+    assert "ATENÇÃO: resultado de baixa confiança" in saida
+    assert "provavelmente NÃO é o texto claro correto" in saida
+    # O aviso precisa vir antes do texto, ou passa desapercebido.
+    assert saida.index("ATENÇÃO") < saida.index("Texto decifrado")
+
+
+def test_no_warning_is_printed_for_a_good_result(capsys):
+    criptograma = encode(PORTUGUESE_LONG, "segredo", alphabet="strict")
+    resolver_criptograma(criptograma, idiomas=("pt",), verbose=True)
+
+    assert "ATENÇÃO" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "entrada",
+    ["", "   ", "!!! ... 123", "X", "XY"],
+    ids=["vazio", "espacos", "sem-letras", "uma-letra", "duas-letras"],
+)
+def test_degenerate_input_does_not_crash_and_is_flagged(entrada):
+    # O menu aceita texto livre: entrada degenerada não pode quebrar o
+    # ataque, e nunca deve ser apresentada como um resultado válido.
+    resultado = resolver_criptograma(entrada, idiomas=("pt",), verbose=False)
+
+    assert not resultado.confiavel
+    assert resultado.alertas
+
+
 # --- Limitações conhecidas ---------------------------------------------------
 #
 # Os dois testes abaixo documentam defeitos reais, ainda não corrigidos.
@@ -304,8 +411,10 @@ def test_score_should_prefer_the_correct_key():
     reason=(
         "LIMIAR_ACEITACAO=0,55 não separa acerto de erro em formato "
         "estrito: um texto completamente ilegível obtido de um criptograma "
-        "curto recebe score 0,65–0,88, acima do limiar. O ataque apresenta "
-        "o resultado sem qualquer aviso de baixa confiança."
+        "curto recebe score 0,65–0,88, acima do limiar. O score continua "
+        "servindo apenas para ordenar candidatos entre si; quem detecta o "
+        "resultado ruim é a avaliação de confiança (ResultadoAtaque.alertas), "
+        "testada acima."
     ),
     strict=True,
 )

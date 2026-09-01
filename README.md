@@ -184,7 +184,14 @@ resultado.melhor.chave        # chave recuperada
 resultado.melhor.texto        # texto claro
 resultado.melhor.score        # plausibilidade (maior = melhor)
 resultado.tentativas          # histórico de todas as tentativas
+resultado.confiavel           # False quando o resultado não é de fiar
+resultado.alertas             # os motivos, quando não é
 ```
+
+O ataque **sempre** devolve algum resultado — não existe "não encontrei".
+Por isso, antes de tomar o texto como resposta, verifique
+`resultado.confiavel`. Em modo `verbose` um aviso destacado é impresso
+imediatamente antes do texto decifrado quando há motivo para desconfiar.
 
 Passando `idiomas=("pt", "en")` o idioma é **detectado automaticamente**: o
 ataque roda para os dois e a tentativa de maior score vence. O menu, por sua
@@ -236,7 +243,22 @@ busca local: posição por posição, testam-se as letras alternativas mais
 prováveis daquela coluna, mantendo a troca apenas quando ela melhora o score do
 texto inteiro. A chave nunca piora — só melhora ou permanece.
 
-**6. Registro do processo.** Com `verbose=True` cada tentativa é impressa, de
+**6. Verificação de confiança.** O score ordena candidatos entre si, mas não
+diz se o melhor deles é bom. Duas verificações independentes detectam um
+resultado sem base estatística:
+
+- **amostra por coluna** — cada coluna é atacada isoladamente contra uma
+  distribuição de 26 letras; abaixo de 20 letras por coluna o qui-quadrado
+  deixa de medir o idioma e passa a ajustar ruído;
+- **IC do texto decifrado** — um IC muito *abaixo* do esperado para o idioma
+  indica chave errada (o texto ainda mistura deslocamentos); um IC muito
+  *acima* indica superajuste, ou seja, o ataque forçou as colunas a imitar as
+  frequências do idioma, o que não ocorre em texto real.
+
+Havendo qualquer um dos dois, o resultado é apresentado com um aviso explícito
+de baixa confiança, em vez de ser exibido como se fosse a resposta.
+
+**7. Registro do processo.** Com `verbose=True` cada tentativa é impressa, de
 modo que o caminho percorrido fique visível, e não apenas a resposta final.
 
 ## Exemplo de execução
@@ -274,7 +296,8 @@ foi ranqueado à frente do 7 pelo IC.
 - **Criptogramas curtos são pouco confiáveis.** O IC e o qui-quadrado são
   estimativas estatísticas: quanto mais curto o texto (e quanto maior a chave),
   menos letras por coluna e mais ruído. Nos testes, textos abaixo de ~200 letras
-  frequentemente falham.
+  frequentemente falham — mas esses casos agora são **sinalizados** pela
+  verificação de confiança, em vez de apresentados como resposta.
 - **O score pode preferir uma chave errada à correta.** Em formato estrito o
   único sinal disponível é o qui-quadrado, porque sem espaços o texto decifrado
   é uma única palavra e a fração de palavras comuns é sempre zero. O
@@ -284,10 +307,10 @@ foi ranqueado à frente do 7 pelo IC.
   `xfail`.
 - **O limiar de aceitação não separa acerto de erro.** `LIMIAR_ACEITACAO = 0,55`
   quase nunca é cruzado em formato estrito: um texto completamente ilegível,
-  obtido de um criptograma curto, recebe score entre 0,65 e 0,88. Como
-  consequência, o refinamento raramente é acionado e o programa **sempre**
-  apresenta a melhor tentativa sem nenhum aviso de baixa confiança, mesmo
-  quando nenhuma é boa. Coberto pelo teste
+  obtido de um criptograma curto, recebe score entre 0,65 e 0,88. A
+  consequência que resta é que o refinamento raramente é acionado — quem
+  detecta o resultado ruim é a verificação de confiança da etapa 6, não o
+  score. Coberto pelo teste
   `test_illegible_result_should_score_below_the_threshold`, marcado como
   `xfail`.
 - **Acentos não são restaurados**, pois a cifra os reduz à letra base (ver

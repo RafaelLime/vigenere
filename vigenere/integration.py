@@ -28,6 +28,7 @@ if __package__ in (None, ""):
     from vigenere.attack import (
         ENGLISH_FREQ,
         PORTUGUESE_FREQ,
+        calculate_ic,
         candidate_key_lengths,
         recover_key,
         shift_candidates,
@@ -38,6 +39,7 @@ else:
     from .attack import (
         ENGLISH_FREQ,
         PORTUGUESE_FREQ,
+        calculate_ic,
         candidate_key_lengths,
         recover_key,
         shift_candidates,
@@ -46,6 +48,17 @@ else:
     from .cipher import decode, encode
 
 LIMIAR_ACEITACAO = 0.55
+
+# Amostra mínima por coluna para a análise de frequência ser confiável.
+# Cada coluna é atacada isoladamente contra uma distribuição de 26 letras;
+# com poucas letras o qui-quadrado deixa de medir o idioma e passa a
+# ajustar ruído, produzindo um texto que imita as frequências esperadas
+# sem ser linguagem real.
+MIN_LETRAS_POR_COLUNA = 20
+
+# Tolerância na comparação entre o IC do texto decifrado e o IC teórico do
+# idioma, como fração desse valor.
+TOLERANCIA_IC = 0.25
 
 _COMMON_WORDS = {
     "pt": {
@@ -157,6 +170,12 @@ class ResultadoAtaque:
 
     melhor: Tentativa
     tentativas: list[Tentativa] = field(default_factory=list)
+    alertas: list[str] = field(default_factory=list)
+
+    @property
+    def confiavel(self) -> bool:
+        """``False`` quando o resultado não deve ser tomado como a resposta."""
+        return not self.alertas
 
 
 def _log_tentativa(tentativa: Tentativa) -> None:
@@ -171,7 +190,75 @@ def _log_tentativa(tentativa: Tentativa) -> None:
         f"chave='{tentativa.chave}' | score={tentativa.score:.3f} ({etapa})"
     )
 
-# Pipeline picinpal.
+# Avaliação da confiança do resultado.
+#
+# O score serve para ordenar candidatos entre si, mas não diz se o melhor
+# candidato é bom: o ataque sempre devolve algum resultado. As verificações
+# abaixo detectam quando ele não tem base estatística para ser levado a
+# sério, evitando que um texto ilegível seja apresentado como resposta.
+
+
+def _ic_esperado(idioma: str) -> float:
+    """IC teórico do idioma: soma dos quadrados das frequências das letras.
+
+    É o valor que o IC de um texto claro nesse idioma tende a assumir
+    (≈ 0,078 no português, ≈ 0,065 no inglês).
+    """
+    return sum(p * p for p in _freq_for(idioma).values())
+
+
+def _alertas_de_confianca(tentativa: Tentativa, total_letras: int) -> list[str]:
+    """Lista os motivos para desconfiar de uma tentativa; vazia se não houver.
+
+    Duas verificações independentes:
+
+    1. **Amostra por coluna.** Se o criptograma é curto (ou a chave longa),
+       cada coluna tem poucas letras e o qui-quadrado superajusta.
+    2. **IC do texto decifrado.** Um IC muito abaixo do esperado indica que
+       a chave está errada e o texto continua misturando deslocamentos; um
+       IC muito acima indica superajuste — o ataque forçou as colunas a
+       imitar as frequências do idioma, o que não acontece em texto real.
+    """
+    alertas = []
+
+    letras_por_coluna = total_letras / tentativa.tamanho_chave
+    if letras_por_coluna < MIN_LETRAS_POR_COLUNA:
+        alertas.append(
+            f"apenas {letras_por_coluna:.1f} letras por coluna "
+            f"(mínimo recomendado: {MIN_LETRAS_POR_COLUNA}) — a análise de "
+            f"frequência não tem amostra suficiente para ser confiável"
+        )
+
+    ic_texto = calculate_ic(_clean_for_analysis(tentativa.texto))
+    ic_ref = _ic_esperado(tentativa.idioma)
+    if ic_texto < ic_ref * (1 - TOLERANCIA_IC):
+        alertas.append(
+            f"o índice de coincidência do texto decifrado ({ic_texto:.4f}) "
+            f"está muito abaixo do esperado para '{tentativa.idioma}' "
+            f"({ic_ref:.4f}) — a chave provavelmente está errada"
+        )
+    elif ic_texto > ic_ref * (1 + TOLERANCIA_IC):
+        alertas.append(
+            f"o índice de coincidência do texto decifrado ({ic_texto:.4f}) "
+            f"está muito acima do esperado para '{tentativa.idioma}' "
+            f"({ic_ref:.4f}) — sinal de que as colunas foram superajustadas"
+        )
+
+    return alertas
+
+
+def _log_alertas(alertas: list[str]) -> None:
+    """Imprime o aviso de baixa confiança que acompanha o resultado."""
+    print("\n*** ATENÇÃO: resultado de baixa confiança ***")
+    for alerta in alertas:
+        print(f"  - {alerta}")
+    print(
+        "O texto abaixo provavelmente NÃO é o texto claro correto. "
+        "Tente um criptograma mais longo ou ajuste max_key_length."
+    )
+
+
+# Pipeline principal.
 
 def _tentar_idioma_e_tamanho(
     cleaned: str, original: str, idioma: str, tamanho: int, ic_medio: float
@@ -244,8 +331,12 @@ def resolver_criptograma(
     """
     Estima o comprimento da chave, testa cada idioma e comprimento
     candidato, decifra e avalia o resultado, ajustando a chave quando o
-    score fica abaixo de limiar. Devolve a melhor tentativa e o histórico
-    de todas.
+    score fica abaixo de limiar. Devolve a melhor tentativa, o histórico
+    de todas e os alertas de confiança do resultado escolhido.
+
+    O ataque sempre devolve algum resultado; consulte
+    ``ResultadoAtaque.confiavel`` (ou ``.alertas``) para saber se ele tem
+    base estatística para ser levado a sério.
     """
     cleaned = _clean_for_analysis(ciphertext)
     tamanhos_candidatos = candidate_key_lengths(
@@ -270,6 +361,7 @@ def resolver_criptograma(
                     _log_tentativa(refinada)
 
     melhor = max(tentativas, key=lambda t: t.score)
+    alertas = _alertas_de_confianca(melhor, len(cleaned))
 
     if verbose:
         print("\n=== Melhor resultado encontrado ===")
@@ -277,9 +369,11 @@ def resolver_criptograma(
             f"Idioma: {melhor.idioma} | Tamanho da chave: {melhor.tamanho_chave} "
             f"| Chave: {melhor.chave} | Score: {melhor.score:.3f}"
         )
+        if alertas:
+            _log_alertas(alertas)
         print(f"\nTexto decifrado: {melhor.texto}")
 
-    return ResultadoAtaque(melhor=melhor, tentativas=tentativas)
+    return ResultadoAtaque(melhor=melhor, tentativas=tentativas, alertas=alertas)
 
 
 """
@@ -308,7 +402,7 @@ def _escolher(titulo: str, opcoes: dict[str, str]) -> str:
         if escolha.isdigit() and 1 <= int(escolha) <= len(chaves):
             return chaves[int(escolha) - 1]
 
-        print(f"\nOpção inválida. Digite 1 ou {len(chaves)}.\n")
+        print(f"\nOpção inválida. Digite um número entre 1 e {len(chaves)}.\n")
 
 
 def _executar_cifrar_ou_decifrar(operacao: str) -> None:
