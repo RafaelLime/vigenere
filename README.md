@@ -320,19 +320,32 @@ foi ranqueado à frente do 7 pelo IC.
 
 ## Executando os testes
 
+A suíte de testes do projeto foi construída utilizando o `pytest`. Os testes cobrem desde a lógica matemática das cifras até a interface de linha de comando e os casos de falha do ataque estatístico.
+
+Para instalar as dependências de teste e executá-los em todo o projeto, utilize:
+
 ```bash
 pip install -e ".[test]"
 pytest
 ```
 
+Para rodar os testes de um arquivo específico e focar em uma parte do projeto, passe o caminho do arquivo:
+
+```bash
+pytest tests/test_integration.py
+```
+
+### Cobertura de Testes
+
 | Arquivo | Cobertura |
 | --- | --- |
-| [`tests/test_cipher.py`](tests/test_cipher.py) | Parte I: cifração, decifração, tratamento do alfabeto e dos acentos. |
-| [`tests/test_cli.py`](tests/test_cli.py) | Parte I: interface de linha de comando e validação das entradas. |
-| [`tests/test_attack.py`](tests/test_attack.py) | Parte II: índice de coincidência, separação em colunas, estimativa do comprimento, qui-quadrado e reconstrução da chave. |
-| [`tests/test_integration.py`](tests/test_integration.py) | Parte II: ataque de ponta a ponta em PT e EN, detecção de idioma, refinamento, histórico de tentativas e limites conhecidos. |
+| [`tests/test_cipher.py`](tests/test_cipher.py) | **Parte I:** Cifração, decifração, exemplos canônicos, preservação de maiúsculas/minúsculas, remoção de acentos via NFD e tratamento de caracteres fora do alfabeto A-Z (modos `strict` e `preserve`). |
+| [`tests/test_cli.py`](tests/test_cli.py) | **Parte I:** Validação da interface de linha de comando, verificação de leitura/escrita em arquivos (`-i` e `-o`), modo verbose e tratamento de erros (ex: chaves curtas ou textos sem letras). |
+| [`tests/test_attack.py`](tests/test_attack.py) | **Parte II:** Primitivas estatísticas. Garante que o Índice de Coincidência para linguagens naturais está próximo do teórico (0.078 PT / 0.065 EN), testa a separação em colunas, a análise de Qui-quadrado por coluna e a reconstrução de chaves a partir de fragmentos. |
+| [`tests/test_integration.py`](tests/test_integration.py) | **Parte II:** Ataque orquestrado de ponta a ponta. Testa a detecção automática de idioma, a capacidade do IC de achar tamanhos de chave (e seus múltiplos), o refinamento local para melhorar o score de chaves fracas e os gatilhos de segurança (alertas de baixa confiança). |
 
-Os dois defeitos descritos em *Limitações conhecidas* têm testes marcados como
-`xfail`: eles descrevem o comportamento **correto** e falham de propósito
-enquanto a correção não entra. Quando entrar, viram `XPASS` e devem ser
-convertidos em asserções normais.
+### Testes de Limitações Conhecidas (`xfail`)
+
+Os dois defeitos descritos na seção de *Limitações conhecidas* (a preferência ocasional do score por uma chave errada e o limiar de aceitação que falha em textos curtos no modo `strict`) possuem testes na suíte marcados como `xfail` (Expected Fail) no arquivo [`tests/test_integration.py`](tests/test_integration.py). 
+
+Eles descrevem o comportamento **correto** esperado na situação adversa, mas falham de propósito enquanto uma correção matemática melhor não for implementada. Quando o problema for resolvido, os testes reportarão `XPASS` e deverão ser convertidos em asserções normais.
