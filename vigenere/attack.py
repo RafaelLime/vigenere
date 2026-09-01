@@ -1,3 +1,22 @@
+"""Primitivas de criptoanálise da cifra de Vigenère (Parte II).
+
+Este módulo reúne as ferramentas estatísticas do ataque, cada uma
+correspondendo a uma etapa pedida no enunciado:
+
+- :func:`calculate_ic` — índice de coincidência de um texto;
+- :func:`split_columns` — separação do criptograma nos subconjuntos
+  associados às posições da chave;
+- :func:`candidate_key_lengths` — estimativa dos comprimentos de chave
+  mais prováveis, via IC médio das colunas;
+- :func:`shift_candidates` — análise de frequência de uma coluna contra a
+  distribuição esperada do idioma, pela estatística qui-quadrado;
+- :func:`find_key_character` e :func:`recover_key` — obtenção dos
+  caracteres da chave e reconstrução da chave completa.
+
+A orquestração do ataque (testar idiomas e comprimentos, avaliar o texto
+decifrado e refinar a chave) fica em :mod:`vigenere.integration`.
+"""
+
 from collections import Counter
 import string
 
@@ -22,55 +41,81 @@ ENGLISH_FREQ = {
     'Z': 0.0007
 }
 
+
 def calculate_ic(text: str) -> float:
     """Calcula o Índice de Coincidência (IC) de uma string."""
     N = len(text)
-    
+
     # Textos com 1 ou 0 caracteres não têm pares para comparar
     if N <= 1:
         return 0.0
-        
+
     counts = Counter(text)
-    
+
     # Aplicação direta da fórmula matemática
     numerator = sum(n * (n - 1) for n in counts.values())
     denominator = N * (N - 1)
-    
+
     return numerator / denominator
 
 
-def estimate_key_length(ciphertext: str, max_length: int = 20) -> int:
-    """
-    Estima o tamanho provável da chave separando o texto em 
-    subconjuntos e buscando a maior média de Índice de Coincidência.
-    """
-    best_length = 1
-    best_ic = 0.0
-    
-    for k in range(1, max_length + 1):
-        # Separa o criptograma em k subconjuntos (fatiamento de listas do Python)
-        columns = [ciphertext[i::k] for i in range(k)]
-        
-        # Calcula a média do IC destas colunas
-        avg_ic = sum(calculate_ic(col) for col in columns) / k
-        
-        # O tamanho de chave que gerar o IC mais alto (mais próximo 
-        # do IC de uma linguagem natural) é o provável vencedor
-        if avg_ic > best_ic:
-            best_ic = avg_ic
-            best_length = k
-            
-    return best_length
+def split_columns(text: str, key_length: int) -> list[str]:
+    """Separa ``text`` em ``key_length`` colunas, uma por posição da chave.
 
-def find_key_character(column: str, language_freq: dict = PORTUGUESE_FREQ) -> str:
+    Letras em posições congruentes módulo ``key_length`` foram cifradas
+    pela mesma letra da chave, ou seja, pelo mesmo deslocamento. Cada
+    coluna é portanto uma cifra de César, e é isso que torna possível
+    atacá-las separadamente.
     """
-    Testa os 26 deslocamentos possíveis em uma coluna para encontrar
-    a letra da chave que minimiza a estatística Qui-quadrado.
+    return [text[i::key_length] for i in range(key_length)]
+
+
+def candidate_key_lengths(
+    ciphertext: str, max_length: int = 20, top_n: int = 3
+) -> list[tuple[int, float]]:
+    """Estima os comprimentos de chave mais prováveis pelo IC médio das colunas.
+
+    Testa cada comprimento de 1 até ``max_length``, separa o criptograma
+    em colunas e calcula o IC médio delas. Uma coluna cifrada por um
+    único deslocamento preserva o IC da linguagem natural (≈ 0,078 no
+    português, ≈ 0,065 no inglês); um comprimento errado mistura
+    deslocamentos diferentes e o IC cai para ≈ 0,038, o de uma
+    distribuição uniforme.
+
+    Devolve os ``top_n`` melhores como pares ``(comprimento, ic_médio)``,
+    em ordem decrescente de IC. Devolver vários candidatos (em vez de só
+    o melhor) é importante porque qualquer múltiplo do comprimento real
+    também produz colunas de César válidas, e portanto também apresenta
+    IC alto.
     """
-    best_char = 'A'
-    lowest_chi_sq = float('inf')
+    scores = []
+    for k in range(1, max_length + 1):
+        columns = split_columns(ciphertext, k)
+        avg_ic = sum(calculate_ic(col) for col in columns) / k
+        scores.append((k, avg_ic))
+
+    scores.sort(key=lambda item: item[1], reverse=True)
+    return scores[:top_n]
+
+
+def shift_candidates(
+    column: str, language_freq: dict = PORTUGUESE_FREQ, top_n: int = 1
+) -> list[tuple[str, float]]:
+    """Ranqueia as letras de chave mais prováveis para uma coluna.
+
+    Testa os 26 deslocamentos possíveis: decifra a coluna com cada um e
+    compara a distribuição resultante com ``language_freq`` pela
+    estatística qui-quadrado
+
+        χ² = Σ (observado - esperado)² / esperado
+
+    Quanto menor o χ², mais a coluna decifrada se parece com o idioma.
+    Devolve os ``top_n`` melhores como pares ``(letra, qui_quadrado)``,
+    em ordem crescente de χ².
+    """
     col_length = len(column)
-    
+    results = []
+
     # Testar cada letra de 'A' a 'Z' como possível chave para esta coluna
     for shift in range(26):
         # Desloca as letras da coluna para trás (decifração)
@@ -79,36 +124,44 @@ def find_key_character(column: str, language_freq: dict = PORTUGUESE_FREQ) -> st
             # P_i = (C_i - K_i) mod 26
             shifted_ord = (ord(char) - ord('A') - shift) % 26 + ord('A')
             decrypted_col.append(chr(shifted_ord))
-            
+
         counts = Counter(decrypted_col)
-        
+
         # Calcula o Qui-quadrado para este deslocamento
         chi_sq = 0.0
         for letter in string.ascii_uppercase:
             observed = counts.get(letter, 0)
             expected = col_length * language_freq.get(letter, 0.0)
-            
+
             # Evita divisão por zero para letras com frequência zero
             if expected > 0:
                 chi_sq += ((observed - expected) ** 2) / expected
-                
-        # Atualiza a melhor letra da chave se encontrarmos um Qui-quadrado menor
-        if chi_sq < lowest_chi_sq:
-            lowest_chi_sq = chi_sq
-            best_char = chr(shift + ord('A'))
-            
-    return best_char
+
+        results.append((chr(shift + ord('A')), chi_sq))
+
+    results.sort(key=lambda item: item[1])
+    return results[:top_n]
+
+
+def find_key_character(column: str, language_freq: dict = PORTUGUESE_FREQ) -> str:
+    """Devolve a letra de chave mais provável para uma coluna.
+
+    É o melhor candidato de :func:`shift_candidates`, isto é, o
+    deslocamento que minimiza a estatística qui-quadrado.
+    """
+    return shift_candidates(column, language_freq, top_n=1)[0][0]
+
 
 def recover_key(ciphertext: str, key_length: int, language_freq: dict = PORTUGUESE_FREQ) -> str:
-    """
-    Dada uma estimativa do tamanho da chave, separa o criptograma em colunas
-    e recupera a chave completa usando as frequências do idioma especificado.
+    """Reconstrói a chave completa, dada uma estimativa do seu comprimento.
+
+    Separa o criptograma em colunas e resolve cada uma independentemente
+    como uma cifra de César, usando as frequências do idioma indicado.
     """
     key = ""
-    columns = [ciphertext[i::key_length] for i in range(key_length)]
-    
-    for col in columns:
+
+    for col in split_columns(ciphertext, key_length):
         # Repassa o idioma escolhido para a função de Qui-quadrado
         key += find_key_character(col, language_freq)
-        
+
     return key

@@ -1,3 +1,19 @@
+"""Ataque automático completo à cifra de Vigenère (Parte II).
+
+Orquestra as primitivas estatísticas de :mod:`vigenere.attack` num ataque
+de ponta a ponta: estima os comprimentos de chave mais prováveis, testa
+cada idioma e comprimento candidato, decifra, avalia se o texto obtido
+faz sentido e refina a chave quando o resultado é fraco.
+
+Além do resultado final, devolve o histórico de todas as tentativas
+(:class:`ResultadoAtaque`) e, com ``verbose=True``, imprime o caminho
+percorrido — o enunciado pede que hipóteses testadas e justificativas
+fiquem visíveis, não apenas a resposta.
+
+Também expõe o menu interativo do programa (:func:`main`), executável com
+``python -m vigenere.integration``.
+"""
+
 from __future__ import annotations
 
 import string
@@ -12,16 +28,20 @@ if __package__ in (None, ""):
     from vigenere.attack import (
         ENGLISH_FREQ,
         PORTUGUESE_FREQ,
-        calculate_ic,
+        candidate_key_lengths,
         recover_key,
+        shift_candidates,
+        split_columns,
     )
     from vigenere.cipher import decode, encode
 else:
     from .attack import (
         ENGLISH_FREQ,
         PORTUGUESE_FREQ,
-        calculate_ic,
+        candidate_key_lengths,
         recover_key,
+        shift_candidates,
+        split_columns,
     )
     from .cipher import decode, encode
 
@@ -62,65 +82,6 @@ def _clean_for_analysis(ciphertext: str) -> str:
     porque a análise por colunas fatia o texto por posição.
     """
     return encode(ciphertext, "a", alphabet="strict")
-
-
-def _split_columns(text: str, key_length: int) -> list[str]:
-    """
-    Separa o texto em key_length colunas (uma por posição da chave),
-    já que letras em posições múltiplas de key_length compartilham a
-    mesma letra de deslocamento.
-    """
-    return [text[i::key_length] for i in range(key_length)]
-
-# Candidatos ranqueados (não só "o melhor").
-
-def _candidate_key_lengths(
-    cleaned: str, max_length: int, top_n: int
-) -> list[tuple[int, float]]:
-    """"
-    Testa comprimentos de chave de 1 até max_length e devolve os top_n
-    com maior índice de coincidência médio das colunas — os mais
-    prováveis de serem o comprimento real.
-    """
-    pontuacoes = []
-    for k in range(1, max_length + 1):
-        colunas = _split_columns(cleaned, k)
-        ic_medio = sum(calculate_ic(col) for col in colunas) / k
-        pontuacoes.append((k, ic_medio))
-
-    pontuacoes.sort(key=lambda item: item[1], reverse=True)
-    return pontuacoes[:top_n]
-
-
-def _shift_candidates(
-    column: str, freq: dict, top_n: int
-) -> list[tuple[str, float]]:
-    """
-    Testa os 26 deslocamentos possíveis numa coluna e devolve os top_n
-    com menor qui-quadrado contra freq — as letras de chave mais
-    prováveis para essa posição.
-    """
-    tamanho_coluna = len(column)
-    resultados = []
-
-    for deslocamento in range(26):
-        decifrado = [
-            chr((ord(char) - ord("A") - deslocamento) % 26 + ord("A"))
-            for char in column
-        ]
-        contagem = Counter(decifrado)
-
-        qui_quadrado = 0.0
-        for letra in string.ascii_uppercase:
-            observado = contagem.get(letra, 0)
-            esperado = tamanho_coluna * freq.get(letra, 0.0)
-            if esperado > 0:
-                qui_quadrado += ((observado - esperado) ** 2) / esperado
-
-        resultados.append((chr(deslocamento + ord("A")), qui_quadrado))
-
-    resultados.sort(key=lambda item: item[1])
-    return resultados[:top_n]
 
 
 """
@@ -237,13 +198,13 @@ def _refinar(
     busca local que nunca piora a chave, só melhora ou mantém.
     """
     freq = _freq_for(tentativa.idioma)
-    colunas = _split_columns(cleaned, tentativa.tamanho_chave)
+    colunas = split_columns(cleaned, tentativa.tamanho_chave)
 
     melhor_chave = list(tentativa.chave)
     melhor_score = tentativa.score
 
     for posicao, coluna in enumerate(colunas):
-        candidatos = _shift_candidates(coluna, freq, top_n_por_posicao)
+        candidatos = shift_candidates(coluna, freq, top_n_por_posicao)
         for letra_candidata, _qui_quadrado in candidatos:
             if letra_candidata.lower() == melhor_chave[posicao]:
                 continue  # já é a letra atual nessa posição
@@ -287,7 +248,7 @@ def resolver_criptograma(
     de todas.
     """
     cleaned = _clean_for_analysis(ciphertext)
-    tamanhos_candidatos = _candidate_key_lengths(
+    tamanhos_candidatos = candidate_key_lengths(
         cleaned, max_key_length, n_tamanhos_candidatos
     )
 
