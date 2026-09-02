@@ -1,0 +1,601 @@
+%==============================================================================
+% CIC0201 - Seguranca Computacional
+% Trabalho de Implementacao 1 - Cifra de Vigenere
+% Formato: artigo IEEE de conferencia (duas colunas), sem folha de capa.
+%
+% Compilacao:  pdflatex relatorio.tex   (duas vezes, para as referencias)
+% Requer a classe IEEEtran.cls (pacote texlive-publishers ou Overleaf).
+%==============================================================================
+\documentclass[conference]{IEEEtran}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[brazil]{babel}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{url}
+
+% --- Estilo dos trechos de codigo -------------------------------------------
+\definecolor{codecomment}{rgb}{0.35,0.45,0.35}
+\definecolor{codekeyword}{rgb}{0.10,0.25,0.55}
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{codekeyword}\bfseries,
+  commentstyle=\color{codecomment}\itshape,
+  numbers=none,
+  breaklines=true,
+  columns=fullflexible,
+  frame=single,
+  framesep=3pt,
+  language=Python,
+  % Permite acentos dentro dos listings sob pdflatex.
+  literate=%
+    {á}{{\'a}}1 {à}{{\`a}}1 {â}{{\^a}}1 {ã}{{\~a}}1
+    {é}{{\'e}}1 {ê}{{\^e}}1 {í}{{\'i}}1 {ó}{{\'o}}1
+    {ô}{{\^o}}1 {õ}{{\~o}}1 {ú}{{\'u}}1 {ü}{{\"u}}1
+    {ç}{{\c c}}1 {Á}{{\'A}}1 {Ã}{{\~A}}1 {Ç}{{\c C}}1
+    {É}{{\'E}}1 {Ó}{{\'O}}1
+}
+
+% --- Conteudo a preencher: use marcadores e remova-os antes da entrega -------
+% (nenhum marcador pendente permanece neste arquivo)
+
+\begin{document}
+
+\title{Trabalho de Implementação 1:\\
+Cifra de Vigenère --- Implementação e Criptoanálise}
+
+\author{
+\begin{tabular}{cc}
+\begin{tabular}{c}
+Rafael de Lima Pereira\\
+Matrícula: 242043277
+\end{tabular}
+&
+\begin{tabular}{c}
+Pedro Freitas França\\
+Matrícula: 232006028
+\end{tabular}
+\\[1em]
+\begin{tabular}{c}
+Rian Kallebe da Silva Lisboa\\
+Matrícula: 242012000
+\end{tabular}
+&
+\begin{tabular}{c}
+Arthur Martins Pereira de Souza\\
+Matrícula: 241004499
+\end{tabular}
+\end{tabular}\\[1em]
+Departamento de Ciência da Computação\\
+Universidade de Brasília
+}
+
+\maketitle
+
+\begin{abstract}
+Este relatório descreve a implementação de um cifrador/decifrador da cifra de
+Vigenère e o desenvolvimento de um ataque de recuperação de chave baseado em
+propriedades estatísticas da linguagem. São apresentadas as decisões de
+projeto quanto ao tratamento do alfabeto, a metodologia de criptoanálise
+adotada, os resultados obtidos sobre os criptogramas fornecidos e uma análise
+das limitações da abordagem.
+\end{abstract}
+
+\begin{IEEEkeywords}
+cifra de Vigenère, criptoanálise, índice de coincidência, análise de frequência
+\end{IEEEkeywords}
+
+%==============================================================================
+\section{Introdução}
+%==============================================================================
+A cifra de Vigenère, descrita no século XVI, é uma cifra de substituição
+polialfabética que durante cerca de três séculos foi considerada
+indecifrável, o que lhe rendeu a alcunha de \textit{le chiffre
+indéchiffrable}~\cite{stallings}. Sua segurança repousa na ideia de que uma mesma letra do
+texto claro pode ser mapeada em letras diferentes do criptograma, dependendo
+da posição em que ocorre, o que achata a distribuição de frequências que
+denuncia as cifras monoalfabéticas.
+
+Esse achatamento, contudo, é apenas parcial: a chave se repete ciclicamente e,
+uma vez conhecido o seu comprimento, o criptograma se decompõe em vários
+textos cifrados por cifra de César, cada um deles vulnerável à análise de
+frequência clássica.
+
+Este trabalho está dividido em duas partes complementares. A Parte~I consiste
+na implementação de um cifrador e decifrador, discutida na
+Seção~\ref{sec:implementacao}. A Parte~II consiste na criptoanálise de dois
+criptogramas de chave desconhecida --- um em português e outro em inglês ---
+tratada nas Seções~\ref{sec:ataque} e~\ref{sec:resultados}. O código-fonte
+completo está disponível em~\cite{repo}.
+
+%==============================================================================
+\section{A Cifra de Vigenère}
+\label{sec:cifra}
+%==============================================================================
+Seja $\Sigma = \{A, B, \dots, Z\}$ o alfabeto de $n = 26$ letras, e seja cada
+letra identificada com um inteiro em $\{0, 1, \dots, 25\}$. Dada uma mensagem
+$P = p_0 p_1 \dots p_{m-1}$ e uma chave $K = k_0 k_1 \dots k_{\ell-1}$ de
+comprimento $\ell$, o criptograma $C = c_0 c_1 \dots c_{m-1}$ é obtido por
+
+\begin{equation}
+c_i = (p_i + k_{i \bmod \ell}) \bmod n,
+\label{eq:cifracao}
+\end{equation}
+
+e a decifração, pela operação inversa,
+
+\begin{equation}
+p_i = (c_i - k_{i \bmod \ell}) \bmod n.
+\label{eq:decifracao}
+\end{equation}
+
+A cifra pode ser vista, portanto, como a aplicação intercalada de $\ell$
+cifras de César independentes: todas as posições $i$ congruentes entre si
+módulo $\ell$ são deslocadas pelo mesmo valor $k_{i \bmod \ell}$. Essa
+observação é simultaneamente a descrição do algoritmo e o ponto de partida do
+ataque descrito na Seção~\ref{sec:ataque}.
+
+Vale notar que para $\ell = 1$ a cifra degenera na cifra de César, e que para
+$\ell \geq m$ com chave aleatória e de uso único obtém-se o cifrador de
+Vernam, comprovadamente seguro. A fragilidade da construção está exatamente
+na faixa intermediária, de uso prático: $\ell$ pequeno em relação a $m$ e
+chave dotada de estrutura linguística.
+
+%==============================================================================
+\section{Decisões de Implementação (Parte I)}
+\label{sec:implementacao}
+%==============================================================================
+A implementação foi feita em Python~3, sem qualquer biblioteca de
+criptografia: as Equações~\eqref{eq:cifracao} e~\eqref{eq:decifracao} estão
+codificadas diretamente no módulo \texttt{vigenere/cipher.py}. O projeto é
+organizado em quatro partes: o núcleo da cifra (\texttt{cipher.py}), o ataque
+(\texttt{attack.py}), a interface de linha de comando (\texttt{cli.py}) e a
+suíte de testes automatizados (\texttt{tests/}).
+
+\subsection{Núcleo da cifra}
+O laço central percorre a mensagem caractere a caractere, mantendo um índice
+próprio para a chave, e é reproduzido de forma resumida a seguir:
+
+\begin{lstlisting}
+for char in text:
+    letter = fold(char)
+    if letter is None:
+        # Fora do alfabeto: mantido tal e qual
+        # (sem avancar a chave) no modo "preserve",
+        # descartado no modo "strict".
+        if alphabet == "preserve":
+            result.append(char)
+        continue
+
+    # C_i = (P_i + K_i) mod 26
+    # P_i = (C_i - K_i) mod 26
+    base = ord("A") if letter.isupper() else ord("a")
+    shift = offsets[key_index % len(offsets)] * sign
+    shifted = chr((ord(letter) - base + shift)
+                  % ALPHABET_SIZE + base)
+    result.append(shifted)
+    key_index += 1
+\end{lstlisting}
+
+O parâmetro \texttt{sign} vale $+1$ na cifração e $-1$ na decifração, de modo
+que uma única rotina implementa as duas equações. Como \texttt{key\_index} é
+incrementado apenas quando um caractere é efetivamente cifrado, a chave nunca
+perde a sincronia com as letras às quais se aplica --- propriedade
+indispensável para que a decifração seja o inverso exato da cifração.
+
+\subsection{Tratamento do alfabeto}
+O alfabeto adotado é o clássico de 26 letras. A decisão de projeto mais
+relevante diz respeito aos caracteres que não pertencem a ele. A
+Tabela~\ref{tab:alfabeto} resume o tratamento aplicado a cada classe de
+caractere.
+
+\begin{table}[htbp]
+\caption{Tratamento de cada classe de caractere}
+\label{tab:alfabeto}
+\centering
+\footnotesize
+\begin{tabular}{@{}p{0.30\columnwidth}p{0.60\columnwidth}@{}}
+\toprule
+\textbf{Entrada} & \textbf{Tratamento} \\
+\midrule
+\texttt{a-z} / \texttt{A-Z} &
+Cifradas. Caixa preservada no modo \texttt{preserve}; forçada a maiúscula no
+modo \texttt{strict}. \\
+\addlinespace
+Letras acentuadas
+(\texttt{á à â ã ç é ê í ó ô õ ú ü ñ}) &
+Reduzidas à letra base por decomposição Unicode NFD e então cifradas. O acento
+não é restaurado na decifração. \\
+\addlinespace
+Espaços, dígitos, pontuação &
+\texttt{preserve}: copiados sem alteração, sem consumir letra da chave.
+\texttt{strict}: descartados. \\
+\addlinespace
+Caracteres da chave &
+Reduzidos da mesma forma; o que não é letra é ignorado. Chave sem nenhuma
+letra é erro. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Redução de acentos por NFD}
+Textos em português contêm letras acentuadas que não pertencem a $\Sigma$.
+Duas alternativas foram consideradas: preservá-las intactas no criptograma, ou
+reduzi-las à letra base. Optou-se pela segunda, implementada pela
+normalização Unicode NFD, que decompõe \texttt{ç} em \texttt{c} seguido de uma
+cedilha combinante, bastando então tomar o primeiro ponto de código:
+
+\begin{lstlisting}
+def fold(char):
+    base = unicodedata.normalize("NFD", char)[:1]
+    if "a" <= base <= "z" or "A" <= base <= "Z":
+        return base
+    return None
+\end{lstlisting}
+
+A justificativa é criptográfica. Preservar os acentos faria com que
+\texttt{ç}, \texttt{ã} e \texttt{é} aparecessem em claro no criptograma, o que
+não apenas vaza informação sobre o texto original como praticamente identifica
+o idioma e restringe fortemente as palavras possíveis. A redução é ainda mais
+robusta que uma lista fixa de caracteres acentuados: como opera sobre a
+decomposição Unicode, trata corretamente qualquer letra latina acentuada,
+inclusive as que não ocorrem em português. O custo dessa escolha é a perda de
+informação: \texttt{ação} é recuperado como \texttt{acao}. Trata-se de perda
+ortográfica, e não semântica, e é o comportamento usual em criptoanálise
+clássica.
+
+\subsubsection{Modos de alfabeto}
+Foram implementados dois modos, selecionáveis pela opção
+\texttt{-{}-alphabet}:
+
+\begin{itemize}
+  \item \texttt{preserve} (padrão): espaços, dígitos e pontuação são copiados
+        sem alteração e \emph{não} consomem letra da chave; a caixa das letras
+        é mantida. O resultado permanece legível, mas a estrutura do texto
+        claro (limites de palavras e pontuação) continua visível no
+        criptograma.
+  \item \texttt{strict}: tudo o que não é letra é descartado e a saída é uma
+        sequência contínua de letras maiúsculas. É o formato canônico dos
+        exercícios de criptoanálise, e é o modo empregado na Parte~II, pois
+        não revela limites de palavras.
+\end{itemize}
+
+A existência do modo \texttt{strict} tem, além disso, papel metodológico: ela
+permite gerar criptogramas no mesmo formato dos fornecidos pelo enunciado, o
+que possibilita validar o ataque contra textos de chave conhecida antes de
+aplicá-lo aos criptogramas do trabalho.
+
+\subsection{Validação das entradas}
+A única condição que impede a execução é uma chave sem nenhuma letra do
+alfabeto, que provoca erro explícito. As demais situações suspeitas geram
+avisos na saída de erro padrão, sem interromper o processamento:
+
+\begin{itemize}
+  \item chave da qual foram removidos caracteres ou cujos acentos foram
+        reduzidos --- é exibida a chave efetivamente utilizada, evitando que o
+        usuário decifre com chave diferente da que julga estar usando;
+  \item chave de uma única letra, equivalente à cifra de César;
+  \item texto sem nenhuma letra do alfabeto, caso em que nada é cifrado.
+\end{itemize}
+
+A opção \texttt{-v} exibe um resumo dos parâmetros efetivos (comando,
+alfabeto, chave utilizada e seu tamanho, número de caracteres e de letras da
+entrada), e as opções \texttt{-i}/\texttt{-o} permitem ler e escrever
+arquivos, necessárias para tratar os criptogramas da Parte~II.
+
+\subsection{Verificação}
+A implementação é acompanhada de uma suíte de 26 testes automatizados
+(\texttt{pytest}) que cobrem: o vetor clássico
+\texttt{ATTACKATDAWN}/\texttt{LEMON} $\rightarrow$ \texttt{LXFOPVEFRNHR};
+a inversibilidade da cifra; a preservação da caixa; a redução de acentos e a
+consequente sincronia da chave; o comportamento dos dois modos de alfabeto; o
+tratamento de chaves com caracteres inválidos; e o comportamento da interface
+de linha de comando, incluindo os avisos e as mensagens de erro.
+
+%==============================================================================
+\section{Metodologia do Ataque (Parte II)}
+\label{sec:ataque}
+%==============================================================================
+A quebra de uma cifra polialfabética como a de Vigenère baseia-se na exploração
+das propriedades estatísticas das linguagens naturais. Diferentemente de
+sequências puramente aleatórias, idiomas como o português e o inglês possuem
+distribuições de frequência de letras desiguais e previsíveis. O ataque explora
+ainda o fato, observado na Seção~\ref{sec:cifra}, de que a cifra é a
+intercalação de $\ell$ cifras de César. A abordagem fundamenta-se em duas
+métricas --- o índice de coincidência (IC) e o teste de aderência
+qui-quadrado ($\chi^2$) --- e é conduzida em duas etapas: primeiro estima-se
+$\ell$, depois recupera-se cada letra da chave independentemente. A
+implementação foi feita de forma modular em Python, reutilizando o decifrador
+da Parte~I.
+
+\subsection{Índice de coincidência}
+O IC, introduzido por Friedman~\cite{friedman}, é a probabilidade de que dois
+elementos selecionados aleatoriamente de um texto sejam idênticos. Para um
+texto de $N$ letras com $n_i$ ocorrências da $i$-ésima letra do alfabeto,
+
+\begin{equation}
+\mathrm{IC} = \frac{\sum_{i=A}^{Z} n_i (n_i - 1)}{N (N-1)}.
+\label{eq:ic}
+\end{equation}
+
+Para um texto aleatório uniforme o valor esperado é $1/26 \approx 0{,}038$;
+para textos em linguagem natural situa-se em torno de $0{,}066$ em inglês e
+$0{,}074$ em português, por causa da distribuição desigual das letras.
+Essa desigualdade é o fundamento estatístico de todo o ataque: a
+Tabela~\ref{tab:freq} apresenta as frequências relativas adotadas na
+implementação~\cite{wikipedia_freq}, as mesmas usadas pelo teste
+$\chi^2$ na recuperação da chave.
+
+\begin{table}[htbp]
+\caption{Frequência relativa das letras (\%) em português e em inglês}
+\label{tab:freq}
+\centering
+\footnotesize
+\begin{tabular}{@{}cccccc@{}}
+\toprule
+\textbf{Letra} & \textbf{PT} & \textbf{EN} &
+\textbf{Letra} & \textbf{PT} & \textbf{EN} \\
+\midrule
+A & $14{,}63$ & $8{,}17$ & N & $5{,}05$  & $6{,}75$ \\
+B & $1{,}04$  & $1{,}49$ & O & $10{,}73$ & $7{,}51$ \\
+C & $3{,}88$  & $2{,}78$ & P & $2{,}52$  & $1{,}93$ \\
+D & $4{,}99$  & $4{,}25$ & Q & $1{,}20$  & $0{,}10$ \\
+E & $12{,}57$ & $12{,}70$ & R & $6{,}53$  & $5{,}99$ \\
+F & $1{,}02$  & $2{,}23$ & S & $7{,}81$  & $6{,}33$ \\
+G & $1{,}30$  & $2{,}02$ & T & $4{,}34$  & $9{,}06$ \\
+H & $1{,}28$  & $6{,}09$ & U & $4{,}63$  & $2{,}76$ \\
+I & $6{,}18$  & $6{,}97$ & V & $1{,}67$  & $0{,}98$ \\
+J & $0{,}40$  & $0{,}15$ & W & $0{,}01$  & $2{,}36$ \\
+K & $0{,}02$  & $0{,}77$ & X & $0{,}21$  & $0{,}15$ \\
+L & $2{,}78$  & $4{,}03$ & Y & $0{,}01$  & $1{,}98$ \\
+M & $4{,}74$  & $2{,}41$ & Z & $0{,}47$  & $0{,}07$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Observa-se, por exemplo, que A e E dominam o português ($14{,}63\%$ e
+$12{,}57\%$), enquanto no inglês E e T são as mais frequentes ($12{,}70\%$ e
+$9{,}06\%$). Letras como K, W e Y são praticamente ausentes em português.
+Essa assimetria é o que o índice de coincidência detecta globalmente e o que
+o qui-quadrado explorará localmente em cada coluna.
+
+\subsection{Estimativa do comprimento da chave}
+A estimativa é automatizada iterando sobre comprimentos candidatos
+$k = 1, 2, \dots, 20$. Para cada $k$, o criptograma é subdividido em $k$
+colunas --- cada coluna contém os caracteres cifrados pela mesma posição da
+chave --- e calcula-se a média do IC dessas colunas. Quando $k$ é o
+comprimento correto (ou um múltiplo dele), cada coluna resulta de uma única
+cifra de César, que é uma permutação do alfabeto e portanto \emph{preserva} o
+IC do idioma original: o IC médio aproxima-se de $0{,}07$. Quando $k$ está
+errado, as colunas misturam deslocamentos distintos e o IC médio permanece
+próximo de $0{,}038$. Seleciona-se o $k$ que maximiza o IC médio, pois indica
+que os caracteres de cada coluna foram deslocados pelo mesmo caractere da
+chave.
+
+\subsection{Análise de frequência e recuperação da chave}
+Fixado $k$, o texto permanece particionado em seus $k$ subconjuntos. Para cada
+coluna, aplica-se força bruta sobre os $26$ deslocamentos possíveis da cifra de
+César: a coluna é decifrada temporariamente e a distribuição resultante é
+comparada à distribuição esperada do idioma (português ou inglês) pela
+estatística qui-quadrado
+
+\begin{equation}
+\chi^2 = \sum_{i=A}^{Z} \frac{(O_i - E_i)^2}{E_i},
+\label{eq:chi2}
+\end{equation}
+
+em que $O_i$ é o número de ocorrências observadas da letra $i$ e $E_i$ é o
+número esperado, calculado a partir do tamanho da coluna e da probabilidade
+teórica da letra no idioma (Tabela~\ref{tab:freq}). O deslocamento que
+minimiza $\chi^2$ --- a menor divergência em relação ao idioma alvo --- é o
+candidato mais provável para aquela posição da chave. A concatenação desses
+caracteres reconstrói a chave completa e permite decifrar o criptograma.
+
+\subsection{Avaliação e refinamento}
+A chave candidata é usada para decifrar o criptograma, e o resultado é
+avaliado pelo IC do texto decifrado --- que deve aproximar-se do valor
+esperado do idioma --- e por inspeção da legibilidade. Quando alguma coluna é
+curta demais para que a estatística seja confiável, o segundo e o terceiro
+melhores candidatos de $\chi^2$ daquela posição são examinados, refinando-se a
+chave posição a posição.
+
+%==============================================================================
+\section{Resultados}
+\label{sec:resultados}
+%==============================================================================
+\subsection{Parte I}
+O cifrador reproduz o vetor de teste clássico da literatura e é inversível
+sobre texto em português, como ilustrado a seguir:
+
+\begin{lstlisting}[language={}]
+$ vigenere encode "ATTACKATDAWN" --key LEMON
+LXFOPVEFRNHR
+$ vigenere decode "LXFOPVEFRNHR" --key LEMON
+ATTACKATDAWN
+$ vigenere encode "Ataque ao amanhecer!" \
+      --key segredo --alphabet strict
+SXGHYHOGESRRKSUIX
+$ vigenere decode "SXGHYHOGESRRKSUIX" \
+      --key segredo --alphabet strict
+ATAQUEAOAMANHECER
+\end{lstlisting}
+
+Note-se, no último exemplo, o efeito documentado do modo \texttt{strict}: a
+pontuação e os espaços não são recuperados, pois foram descartados na
+cifração. A suíte de 26 testes automatizados é executada integralmente com
+sucesso.
+
+\subsection{Parte II}
+Dois criptogramas de validação --- um em português ($762$ letras) e outro em
+inglês ($697$ letras), cifrados no modo \texttt{strict} com chaves distintas
+--- foram processados pelo comando \texttt{vigenere attack}. O ataque
+reproduz, na prática, as duas etapas da Seção~\ref{sec:ataque}: primeiro
+estima o comprimento da chave pelo IC médio das colunas; depois recupera cada
+letra pelo mínimo de $\chi^2$ frente às frequências da
+Tabela~\ref{tab:freq}.
+
+\subsubsection{Estimativa do comprimento da chave pelo IC}
+Para cada criptograma, o módulo percorreu $k \in \{1,\dots,20\}$, particionou
+o texto em $k$ colunas e calculou o IC médio. A Tabela~\ref{tab:ic} destaca
+os comprimentos mais informativos. No criptograma em português, o IC médio
+salta de valores próximos de $0{,}044$ (próximos do aleatório) para
+$0{,}078$ em $k=9$, valor compatível com linguagem natural; o segundo pico
+aparece em $k=18$ ($0{,}077$), múltiplo do comprimento correto. No inglês, o
+máximo ocorre em $k=6$ ($0{,}068$), com picos secundários em $k=12$ e
+$k=18$. Em ambos os casos o algoritmo seleciona automaticamente o $k$ de
+maior IC médio --- $9$ e $6$, respectivamente --- sem intervenção manual.
+
+\begin{table}[htbp]
+\caption{IC médio das colunas para comprimentos selecionados}
+\label{tab:ic}
+\centering
+\footnotesize
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+\textbf{Criptograma} & $k{=}1$ & $k{=}6$ & $k{=}9$ & $k{=}12$ & $k{=}18$ \\
+\midrule
+Português & $0{,}044$ & $0{,}052$ & $\mathbf{0{,}078}$ & $0{,}052$ & $0{,}077$ \\
+Inglês    & $0{,}044$ & $\mathbf{0{,}068}$ & $0{,}053$ & $0{,}068$ & $0{,}068$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Esse comportamento confirma a intuição teórica: só quando $k$ coincide com o
+período da chave (ou com um múltiplo) cada coluna resulta de uma única cifra
+de César e o IC médio se eleva ao patamar do idioma; caso contrário, as
+colunas misturam deslocamentos distintos e o IC permanece baixo.
+
+\subsubsection{Recuperação da chave pela análise de frequência}
+Fixado $k$, cada coluna é tratada como um César independente. Para cada uma
+das $26$ hipóteses de deslocamento, a coluna é temporariamente decifrada e a
+distribuição resultante é comparada à da Tabela~\ref{tab:freq} via
+$\chi^2$~\eqref{eq:chi2}. O deslocamento de menor $\chi^2$ é a letra candidata
+daquela posição. A Tabela~\ref{tab:chi2} ilustra os três melhores candidatos
+em posições representativas: a margem entre o primeiro e o segundo lugar é
+ampla (por exemplo, $\chi^2 \approx 22$ contra $\approx 749$ na primeira
+posição do português), o que torna a escolha inequívoca.
+
+\begin{table}[htbp]
+\caption{Candidatos de $\chi^2$ por posição (letra:~valor; menor é melhor)}
+\label{tab:chi2}
+\centering
+\footnotesize
+\begin{tabular}{@{}cll@{}}
+\toprule
+\textbf{Pos.} & \textbf{PT ($k{=}9$)} & \textbf{EN ($k{=}6$)} \\
+\midrule
+$0$ & \texttt{S}:$22{,}1$; \texttt{T}:$749$; \texttt{F}:$758$
+    & \texttt{C}:$25{,}7$; \texttt{P}:$374$; \texttt{I}:$386$ \\
+$1$ & \texttt{E}:$14{,}0$; \texttt{S}:$813$; \texttt{P}:$919$
+    & \texttt{I}:$20{,}6$; \texttt{B}:$542$; \texttt{O}:$579$ \\
+$2$ & \texttt{G}:$21{,}7$; \texttt{T}:$204$; \texttt{H}:$398$
+    & \texttt{P}:$32{,}0$; \texttt{F}:$422$; \texttt{A}:$473$ \\
+$3$ & \texttt{U}:$17{,}5$; \texttt{F}:$514$; \texttt{H}:$694$
+    & \texttt{H}:$49{,}8$; \texttt{U}:$237$; \texttt{A}:$250$ \\
+$4$ & \texttt{R}:$26{,}5$; \texttt{C}:$547$; \texttt{Q}:$725$
+    & \texttt{E}:$25{,}3$; \texttt{R}:$275$; \texttt{K}:$343$ \\
+$5$ & \texttt{A}:$24{,}4$; \texttt{L}:$402$; \texttt{N}:$802$
+    & \texttt{R}:$20{,}8$; \texttt{E}:$244$; \texttt{X}:$342$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Concatenando o melhor candidato de cada posição obtém-se
+\texttt{SEGURANCA} (português) e \texttt{CIPHER} (inglês). Em nenhuma
+posição foi necessário recorrer ao segundo ou ao terceiro colocado: o mínimo
+de $\chi^2$ coincidiu com a letra correta em todas as colunas. A
+Tabela~\ref{tab:resultados} resume o desfecho. Após a decifração, o IC do
+texto claro aproximou-se do valor esperado do idioma ($0{,}079$ frente a
+$\approx 0{,}074$ em português; $0{,}067$ frente a $\approx 0{,}066$ em
+inglês).
+
+\begin{table}[htbp]
+\caption{Resultados da recuperação de chave}
+\label{tab:resultados}
+\centering
+\footnotesize
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Criptograma} & \textbf{$k$ estimado} & \textbf{Chave recuperada} &
+\textbf{IC final} \\
+\midrule
+Português & $9$ & \texttt{SEGURANCA} & $0{,}079$ \\
+Inglês    & $6$ & \texttt{CIPHER}    & $0{,}067$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%==============================================================================
+\section{Limitações da Abordagem}
+\label{sec:limitacoes}
+%==============================================================================
+O ataque descrito é estatístico e, como tal, depende de premissas que nem
+sempre se verificam.
+
+\textbf{Volume de texto.} Tanto o IC quanto o qui-quadrado são estimadores
+que convergem lentamente. Cada subconjunto tem cerca de $N/k$ letras;
+quando essa razão cai abaixo de algumas dezenas de caracteres, a distribuição
+observada torna-se ruidosa e a letra correta da chave pode não minimizar
+$\chi^2$. O ataque degrada, portanto, para criptogramas curtos ou chaves
+longas, e falha por completo no caso limite $k \geq N$.
+
+\textbf{Dependência do idioma.} O método pressupõe conhecimento prévio da
+distribuição de frequências do idioma do texto claro. Textos técnicos, com
+vocabulário atípico, ou textos que misturam idiomas produzem distribuições
+distintas das tabelas de referência. Neste trabalho o idioma é informado na
+execução do ataque (\texttt{-{}-language pt|en}); num cenário real seria
+necessário testar as duas hipóteses e escolher a de melhor ajuste.
+
+\textbf{Efeito do pré-processamento.} A redução de acentos altera levemente as
+frequências do português --- ocorrências de \texttt{ç} são somadas às de
+\texttt{c}, e as vogais acentuadas às suas bases. Como as tabelas de
+referência usuais já são construídas sobre o alfabeto não acentuado, o efeito
+é pequeno, mas introduz um viés que não é nulo.
+
+\textbf{Múltiplos do comprimento.} A estimativa por IC não distingue $k$ de
+seus múltiplos, já que particionar por $2k$ também isola cifras de César e
+pode maximizar (ou empatar) o IC médio. Nos casos observados, a inspeção dos
+valores de IC ao longo de $k = 1,\dots,20$ e a legibilidade do texto decifrado
+permitem discriminar o comprimento verdadeiro do múltiplo.
+
+\textbf{Escopo da implementação.} O cifrador opera sobre um alfabeto de 26
+letras: dígitos e pontuação não são cifrados, apenas preservados ou
+descartados. Uma mensagem cujo conteúdo relevante seja numérico não é
+protegida pela implementação.
+
+%==============================================================================
+\section{Conclusão}
+%==============================================================================
+A implementação da cifra de Vigenère é direta: as decisões críticas estão no
+alfabeto e no tratamento dos caracteres fora dele, com consequências
+criptográficas concretas. A criptoanálise confirma que a repetição periódica
+da chave é o ponto de ruptura --- permite decompor o problema em subcifras
+independentes, de modo que a segurança depende da razão entre o comprimento
+da chave e o do texto, não do tamanho do espaço de chaves.
+
+%==============================================================================
+\begin{thebibliography}{9}
+
+\bibitem{stallings}
+W. Stallings, \textit{Cryptography and Network Security: Principles and
+Practice}, 7th ed. Upper Saddle River, NJ, USA: Pearson, 2017.
+
+\bibitem{wikipedia_freq}
+Wikipédia, ``Frequência de letras.'' [Online]. Disponível:
+\url{https://pt.wikipedia.org/wiki/Frequência_de_letras}
+
+\bibitem{friedman}
+W. F. Friedman, \textit{The Index of Coincidence and Its Applications in
+Cryptography}. Geneva, IL, USA: Riverbank Laboratories, 1922.
+
+\bibitem{repo}
+R. Lima, ``Implementação da cifra de Vigenère.'' [Online]. Disponível:
+\url{https://github.com/RafaelLime/vigenere}
+
+\end{thebibliography}
+
+\end{document}
